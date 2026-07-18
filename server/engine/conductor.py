@@ -147,31 +147,20 @@ class Conductor:
         art = ART.get(choice, "pluck")
         events: list[NoteEvent] = []
 
-        # Distribute parts so multiple phones are genuinely different instruments:
-        #   2+ sections -> section[0] plays melody, the rest play the accompaniment
-        #   1 section   -> it plays both
-        #   0 sections  -> laptop (stage) plays everything via SECTION_ALL
-        n = len(self._sections)
-        if n >= 2:
-            melody_sec = self._sections[0].section_id
-            responder_secs = [s.section_id for s in self._sections[1:]]
-        elif n == 1:
-            melody_sec = self._sections[0].section_id
-            responder_secs = [melody_sec]
-        else:
-            melody_sec = SECTION_ALL
-            responder_secs = [SECTION_ALL]
-
+        # Every device plays the FULL piece (melody + accompaniment) on the one
+        # shared SECTION_ALL stream, differentiated only by its instrument timbre.
+        # Reliability over a spatial split: if one phone can play it, they all can,
+        # and no phone is ever left with a thin or empty part. (Per-track spreading
+        # across phones still happens for a loaded MIDI, in _arrangement_events.)
         for (on, dur, midi, vel) in responder:
-            at, d, note = bar_start + on * self.s16_ms, dur * self.s16_ms, _clampmidi(midi + shift)
-            for sec in responder_secs:
-                events.append(self._note(sec, at, d, note, vel, art))
-
+            events.append(self._note(SECTION_ALL, bar_start + on * self.s16_ms,
+                                     dur * self.s16_ms, _clampmidi(midi + shift), vel, art))
         for (on, dur, midi) in bar.melody:
-            events.append(self._note(melody_sec, bar_start + on * self.s16_ms,
+            events.append(self._note(SECTION_ALL, bar_start + on * self.s16_ms,
                                      dur * self.s16_ms, midi, 0.9, "pluck"))
 
-        log.info("bar %d -> %s (%d notes, shift %+d, %d sections)", idx, choice, len(responder), shift, n)
+        log.info("bar %d -> %s (%d notes, shift %+d, %d sections)",
+                 idx, choice, len(responder), shift, len(self._sections))
         return events
 
     def _arrangement_events(self, idx: int, bar_start: float) -> list[NoteEvent]:

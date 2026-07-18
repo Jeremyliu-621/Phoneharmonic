@@ -19,6 +19,7 @@ let clock = null;
 let synth = null;
 let myId = null;
 let noteCount = 0;
+let recvCount = 0;
 
 function onPlay(ev, peak) {
   pulse.style.background = peak >= 0.9 ? "#e7c583" : "#a8712a";
@@ -37,6 +38,13 @@ function updateHud() {
   if (!clock) return;
   el("theta").textContent = clock.theta === null ? "—" : clock.theta.toFixed(1) + "ms";
   el("rtt").textContent = clock.rtt === null ? "—" : clock.rtt.toFixed(1) + "ms";
+  // audio-context state: "running" = good; "suspended" = no sound (needs a tap)
+  if (synth && synth.ctx) {
+    const st = synth.ctx.state;
+    el("audio").textContent = st;
+    el("audio").style.color = st === "running" ? "#6fcf7f" : "#e58a6a";
+    if (st === "suspended") synth.ctx.resume().catch(() => {});   // self-heal
+  }
 }
 setInterval(updateHud, 500);
 
@@ -74,7 +82,11 @@ joinScreen.addEventListener("click", async () => {
   conn.on(P.CLOCK_PONG, (m) => clock.handlePong(m));
   conn.on(P.SCHED_NOTES, (m) => {
     for (const e of m.events) {
-      if (e.section === P.SECTION_ALL || e.section === myId) synth.schedule(e);
+      if (e.section === P.SECTION_ALL || e.section === myId) {
+        recvCount++;                      // received (network ok) — vs "played" (audio ok)
+        el("recv").textContent = recvCount;
+        synth.schedule(e);
+      }
     }
   });
   conn.on(P.SCHED_CANCEL, (m) => { if (m.allnotesoff) synth.panic(); });
@@ -98,4 +110,9 @@ joinScreen.addEventListener("click", async () => {
 
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible" && synth && synth.ctx) synth.ctx.resume();
+});
+// Tapping the performing screen re-unlocks audio if the context got suspended
+// (iOS/Android suspend it when backgrounded; resume must be in a user gesture).
+stageScreen.addEventListener("pointerdown", () => {
+  if (synth && synth.ctx && synth.ctx.state === "suspended") synth.ctx.resume().catch(() => {});
 });
