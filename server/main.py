@@ -235,6 +235,17 @@ class App:
             song, tracks = load_midi_bytes(data, name)
             self.engine.load_song(song, tracks)
             log.info("song loaded: %s (%d bars, %d parts)", song.name, len(song.bars), len(tracks))
+            # Auto-assign instruments so each phone becomes one of the MIDI's parts.
+            playable = [t for t in tracks if not t["is_drum"]]
+            ready = [s for s in self.session.sections.values() if s.connected]
+            for j, section in enumerate(ready):
+                if j < len(playable):
+                    section.instrument = playable[j]["instrument"]
+                    c = self.hub.get(section.client_id)
+                    if c:
+                        await send_json(c.ws, {"t": P.SECTION_CONFIG, "section_id": section.section_id,
+                                               "instrument": section.instrument})
+            self.engine.on_sections_changed(self.session.engine_sections())
             await self._broadcast_roster()
         except Exception as e:  # noqa: BLE001 - report parse failures to the uploader
             log.warning("midi load failed for %r: %s", name, e)

@@ -6,11 +6,12 @@ Rhythm grid: 16 sixteenth-note slots per bar (4/4). A note is (onset16, dur16, m
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from engine.theory import triad
 
-Note = tuple[int, int, int]  # (onset_16th, dur_16ths, midi)
+Note = tuple[int, int, int]         # (onset_16th, dur_16ths, midi)
+PlayNote = tuple[int, int, int, float]  # (onset_16th, dur_16ths, midi, vel 0..1)
 
 
 @dataclass
@@ -22,11 +23,22 @@ class BarData:
 
 
 @dataclass
+class SongPart:
+    """One instrument's actual notes (a loaded MIDI track), binned per bar. This
+    is the real arrangement, distributed across sections when a MIDI is loaded."""
+    instrument: str
+    is_drum: bool
+    is_melody: bool
+    bars: list[list[PlayNote]]   # per bar: the notes that instrument plays
+
+
+@dataclass
 class Song:
     name: str
     bpm: float
     key_root: int            # pitch class of the key (0 = C)
     bars: list[BarData]
+    parts: list[SongPart] = field(default_factory=list)  # empty for the built-in song
 
     def bar(self, i: int) -> BarData:
         return self.bars[i % len(self.bars)]

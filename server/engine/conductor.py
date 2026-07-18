@@ -122,6 +122,8 @@ class Conductor:
 
     # --- bar generation ---
     def _bar_events(self, idx: int, bar_start: float) -> list[NoteEvent]:
+        if self.song.parts:                      # a loaded MIDI: play its arrangement
+            return self._arrangement_events(idx, bar_start)
         bar = self.song.bar(idx)
         prev = self.song.bar(idx - 1)
         cands = generate(bar, prev, self.song.key_root)
@@ -164,6 +166,39 @@ class Conductor:
                                      dur * self.s16_ms, midi, 0.9, "pluck"))
 
         log.info("bar %d -> %s (%d notes, shift %+d, %d sections)", idx, choice, len(responder), shift, n)
+        return events
+
+    def _arrangement_events(self, idx: int, bar_start: float) -> list[NoteEvent]:
+        """Play a loaded MIDI's parts distributed across sections (round-robin;
+        laptop plays all via SECTION_ALL if no phones), plus the gesture layer
+        riding on the lead. Drums are skipped until we have a percussion voice."""
+        events: list[NoteEvent] = []
+        n = len(self._sections)
+        melody_sec = SECTION_ALL
+        playable = [p for p in self.song.parts if not p.is_drum]   # no percussion voice yet
+        for i, part in enumerate(playable):
+            sec = SECTION_ALL if n == 0 else self._sections[i % n].section_id
+            if part.is_melody:
+                melody_sec = sec
+            for (on, dur, midi, vel) in part.bars[idx % len(part.bars)]:
+                art = "sustain" if dur >= 8 else "pluck"
+                events.append(self._note(sec, bar_start + on * self.s16_ms,
+                                         dur * self.s16_ms, _clampmidi(midi), max(0.12, vel), art))
+
+        # Gesture/editor layer: a candidate built from the lead, riding on top.
+        bar, prev = self.song.bar(idx), self.song.bar(idx - 1)
+        cands = generate(bar, prev, self.song.key_root)
+        if self._forced and self._forced in cands:
+            choice = self._forced
+        else:
+            choice = heuristic.choose(heuristic.rank(self._gesture, list(cands.keys())), self._last_choice)
+        self._last_choice = choice
+        shift = heuristic.octave_shift(self._gesture)
+        for (on, dur, midi, vel) in cands[choice]:
+            events.append(self._note(melody_sec, bar_start + on * self.s16_ms,
+                                     dur * self.s16_ms, _clampmidi(midi + shift), vel * 0.7,
+                                     ART.get(choice, "pluck")))
+        log.info("bar %d arrangement: %d parts -> %d sections, overlay=%s", idx, len(playable), n, choice)
         return events
 
     def _note(self, section: str, at: float, dur: float, midi: int, vel: float, art: str) -> NoteEvent:

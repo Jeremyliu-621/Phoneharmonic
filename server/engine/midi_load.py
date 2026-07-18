@@ -15,7 +15,7 @@ from collections import defaultdict
 
 import mido
 
-from engine.song import BarData, Note, Song
+from engine.song import BarData, Note, Song, SongPart
 from engine.theory import MAJOR, triad
 
 MAX_BARS = 64   # cap loop length so a long MIDI doesn't produce an enormous song
@@ -155,5 +155,21 @@ def load_midi_bytes(data: bytes, name: str = "uploaded") -> tuple[Song, list[dic
         melody.sort()
         bars.append(BarData(root, minor, triad(root, minor), melody))
 
-    song = Song(name=name, bpm=round(bpm, 1), key_root=key_root, bars=bars)
+    # Full arrangement: each part's actual notes binned per bar (for distribution).
+    song_parts: list[SongPart] = []
+    for pi in part_info:
+        part_bars: list[list] = [[] for _ in range(n_bars)]
+        for (s, d, pitch, vel) in parts[pi["channel"]]["notes"]:
+            b = s // bar_ticks
+            if b >= n_bars:
+                continue
+            onset16 = round((s - b * bar_ticks) / six)
+            if 0 <= onset16 < 16:
+                dur16 = max(1, min(16 - onset16, round(d / six)))
+                part_bars[b].append((onset16, dur16, pitch, round(vel / 127, 2)))
+        for pb in part_bars:
+            pb.sort()
+        song_parts.append(SongPart(pi["instrument"], pi["is_drum"], pi["is_melody"], part_bars))
+
+    song = Song(name=name, bpm=round(bpm, 1), key_root=key_root, bars=bars, parts=song_parts)
     return song, part_info
