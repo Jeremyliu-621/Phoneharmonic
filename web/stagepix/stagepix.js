@@ -31,31 +31,31 @@ const seen = new Set();              // sched.notes ids already handled (dedupe)
 const lastPulse = new Map();         // performer id -> last pulse ms (throttle)
 
 // --- performer placement ----------------------------------------------------
-// Arrange the ensemble in a shallow arc that hugs the lit floor: musicians span
-// a centred width (never onto the side curtains), ends downstage (lower/larger),
-// centre upstage (higher/smaller/dimmer), z-ordered front-over-back. Sprite sizes
-// are px derived from the stage height, so the whole scene scales as one unit.
+// Flat, orthographic: musicians stand in a single straight row on the floor
+// line, evenly spaced and all the same size (no perspective, no depth). Sprites
+// auto-fit their slot so any number of performers fills the row without overlap.
+const SPRITE_AR = 128 / 176;   // width / height of a musician sprite
+
 function positionScene() {
   const wrap = el("stagewrap");
-  const H = wrap.clientHeight;
+  const W = wrap.clientWidth, H = wrap.clientHeight;
   if (!H) return;
-  const n = performers.length;
-  const spread = Math.min(44, 16 + n * 5);          // total horizontal span (%)
+  const n = performers.length || 1;
+  const spanL = 8, spanR = 92;                 // % of stage width used by the row
+  const slot = (spanR - spanL) / n;            // width of each performer's slot (%)
+  let wPx = Math.min(0.16 * W, (slot * 0.86 / 100) * W);   // sprite width, capped
+  let hPx = wPx / SPRITE_AR;
+  const maxH = 0.46 * H;                        // don't let a lone musician get huge
+  if (hPx > maxH) { hPx = maxH; wPx = hPx * SPRITE_AR; }
   performers.forEach((p, i) => {
-    const f = n === 1 ? 0.5 : i / (n - 1);
-    const depth = Math.sin(Math.PI * f);            // 1 = centre/upstage, 0 = ends/downstage
-    const x = 50 + (f - 0.5) * spread;              // stays within ~[28,72] -> clear of the curtains
-    const feetY = 84 - depth * 14;                  // 84% (front lip) .. 70% (upstage)
-    const hFrac = 0.205 - depth * 0.05;             // back rows a touch smaller
+    const x = spanL + slot * (i + 0.5);        // centre of the slot
     const node = p.node;
     node.style.left = x + "%";
-    node.style.top = feetY + "%";
-    node.style.zIndex = Math.round(feetY * 10);
-    node.style.filter = `brightness(${(1 - depth * 0.14).toFixed(2)})`;
-    node.querySelector(".sprite").style.height = (hFrac * H) + "px";
+    node.style.top = "82%";                     // feet on the floor line
+    node.style.zIndex = 10 + i;
+    node.querySelector(".sprite").style.height = hPx + "px";
   });
-  el("podium").style.height = (0.16 * H) + "px";
-  el("wand").style.height = (0.10 * H) + "px";
+  el("wand").style.height = (0.13 * H) + "px";
 }
 window.addEventListener("resize", positionScene);
 
@@ -122,7 +122,7 @@ function spawnPulse(p, vel) {
   const wr = wrap.getBoundingClientRect();
   const img = document.createElement("img");
   img.className = "pulse";
-  img.src = "../assets/note_pulse.png";
+  img.src = "../assets/note.png";
   const size = 22 + 16 * Math.min(1, vel || 0.7);
   img.style.width = size + "px";
   img.style.left = (rect.left - wr.left + rect.width / 2) + "px";

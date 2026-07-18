@@ -13,6 +13,7 @@ Run:  python server/main.py
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import socket
@@ -201,6 +202,9 @@ class App:
         if t == P.STAGE_ASSIGN:
             await self._assign_instrument(msg.get("section_id"), msg.get("instrument"))
             return
+        if t == P.SONG_LOAD:
+            await self._load_song(conn, msg.get("name", "uploaded"), msg.get("data", ""))
+            return
         if t in (P.WAND_RECAL, P.STAGE_PLACE):
             return  # aiming/placement wired in P5
 
@@ -223,6 +227,18 @@ class App:
         elif cmd == "force":
             self.engine.set_forced(args.get("candidate"))
         await self._broadcast_roster()
+
+    async def _load_song(self, conn: ClientConn, name: str, b64: str) -> None:
+        from engine.midi_load import load_midi_bytes
+        try:
+            data = base64.b64decode(b64)
+            song, tracks = load_midi_bytes(data, name)
+            self.engine.load_song(song, tracks)
+            log.info("song loaded: %s (%d bars, %d parts)", song.name, len(song.bars), len(tracks))
+            await self._broadcast_roster()
+        except Exception as e:  # noqa: BLE001 - report parse failures to the uploader
+            log.warning("midi load failed for %r: %s", name, e)
+            await send_json(conn.ws, {"t": P.ERR, "code": "bad_midi", "msg": str(e)})
 
     async def _assign_instrument(self, section_id: str, instrument: str) -> None:
         section = self.session.sections.get(section_id)

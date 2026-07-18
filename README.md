@@ -11,8 +11,10 @@ inputs (webcam hand / phone / [ESP32 later]), a music-engine slice where
 **gestures audibly reshape the accompaniment**, **per-section instruments with
 distinct timbres**, a visual **[how-it-works guide](web/guide/)**, and a manual
 **[editor / control room](web/editor/)** (transport, tempo, force-a-candidate,
-assign instruments) — all built and headless-tested (`server/tools/`:
-`smoke_test.py`, `gesture_test.py`). Open gate: the two-phone mic skew test
+assign instruments, **drop a MIDI file** to replace the song), and **MIDI song
+loading** (`mido` parses a dropped `.mid` into tracks/instruments, picks the
+melody, estimates key + per-bar chords) — all built and headless-tested
+(`server/tools/`: `smoke_test.py`, `gesture_test.py`, `midi_test.py`). Open gate: the two-phone mic skew test
 (§ P1 verification). Research on how others sync audience audio (and the "Waterloo"
 reference) is in [`docs/audio-sync-research.md`](docs/audio-sync-research.md) — TL;DR
 we match IRCAM's Soundworks pattern; the one gap is clock-drift compensation.

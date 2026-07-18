@@ -65,6 +65,7 @@ conn.on(P.ROSTER, (m) => {
   readySections = m.sections.filter((s) => s.connected && s.ready).length;
   const eng = m.engine || {};
   if (eng.candidates) renderCandidates(eng.candidates);
+  renderSong(eng);
   el("nowplaying").textContent = eng.last_choice ? (NICE[eng.last_choice] || eng.last_choice) : "—";
   if (eng.bpm && !tempoDragging) { el("tempo").value = eng.bpm; el("tempoval").textContent = eng.bpm + " BPM"; }
 
@@ -102,6 +103,40 @@ function bindSelects() {
     });
   });
 }
+
+// --- song info + MIDI drop ---
+function renderSong(eng) {
+  if (!eng || !eng.song) return;
+  el("songname").textContent = eng.song;
+  const KEYS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+  el("songmeta").textContent = `${KEYS[eng.key_root] || "?"} major · ${eng.bpm} BPM · ${eng.bars} bars`;
+  const tracks = eng.tracks || [];
+  if (!tracks.length) return;
+  el("tracks").innerHTML = tracks.map((t) => `<tr>
+    <td>${t.is_melody ? '<span class="tag">melody</span>' : (t.is_drum ? "🥁" : "")}</td>
+    <td>${t.name}</td><td>${t.instrument}</td><td>${t.note_count}</td></tr>`).join("");
+}
+
+function abToBase64(ab) {
+  const bytes = new Uint8Array(ab);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+async function uploadMidi(file) {
+  if (!file) return;
+  el("drop").textContent = `reading ${file.name}…`;
+  const ab = await file.arrayBuffer();
+  conn.send({ t: P.SONG_LOAD, name: file.name, data: abToBase64(ab) });
+  el("drop").textContent = `⬇ Drop a .mid file here, or click to choose one`;
+}
+const drop = el("drop");
+drop.addEventListener("click", () => el("midifile").click());
+el("midifile").addEventListener("change", (e) => uploadMidi(e.target.files[0]));
+["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", (e) => uploadMidi(e.dataTransfer.files[0]));
+conn.on(P.ERR, (m) => { if (m.code === "bad_midi") { el("drop").textContent = `⚠ ${m.msg} — try another file`; } });
 
 conn.onOpen((w) => { el("status").textContent = `connected · session ${w.config.session}`; });
 conn.onClose(() => { el("status").textContent = "reconnecting…"; });

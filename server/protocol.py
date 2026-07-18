@@ -17,7 +17,8 @@ WAND_FEEDBACK = "wand.feedback" # {value: 1|-1}
 WAND_RECAL = "wand.recal"       # {tw}
 STAGE_PLACE = "stage.place"     # {section_id, azimuth_deg, pos:[x,y,z]}
 STAGE_ASSIGN = "stage.assign"   # {section_id, instrument}
-ADMIN_CMD = "admin.cmd"         # {cmd:"start"|"stop"|"clicktest"|"resync"|"allnotesoff", args?}
+ADMIN_CMD = "admin.cmd"         # {cmd:"start"|"stop"|"clicktest"|"resync"|"allnotesoff"|"tempo"|"force", args?}
+SONG_LOAD = "song.load"         # {name, data}  data = base64 of a .mid file -> replaces the song
 CLOCK_REPORT = "clock.report"   # {theta, rtt}  section's own sync estimate (debug/health readout)
 
 # --- Server -> Client ---

@@ -12,23 +12,22 @@
     img { image-rendering: pixelated; -ms-interpolation-mode: nearest-neighbor;
       user-select: none; -webkit-user-drag: none; }
 
-    /* The 448x256 backdrop is fit to the viewport keeping aspect; every overlay
-       positions in % of this box, so the whole scene scales as one unit. */
+    /* Flat 2D stage: a 448x256 box fit to the viewport, with a flat, orthographic
+       backdrop drawn as CSS colour bands (no perspective) — red valance + gold
+       trim on top, teal back wall, wooden floor stripe, red side curtains, and a
+       warm footlight glow. Musicians stand in a straight row on the floor line. */
     #stagewrap {
-      position: absolute; inset: 0; margin: auto;
+      position: absolute; inset: 0; margin: auto; overflow: hidden;
       width: min(100vw, calc(100vh * (448 / 256)));
       height: min(100vh, calc(100vw * (256 / 448)));
       aspect-ratio: 448 / 256;
+      background:
+        radial-gradient(58% 42% at 50% 74%, rgba(255,214,130,.20), rgba(255,214,130,0) 70%),
+        linear-gradient(90deg, #7c1d28 0 5%, rgba(0,0,0,0) 5% 95%, #7c1d28 95% 100%),
+        linear-gradient(180deg,
+          #8e2230 0 13%, #e0b458 13% 14.2%,
+          #16303c 14.2% 76%, #3f2a17 76% 77.6%, #7a5230 77.6% 100%);
     }
-    #bg { position: absolute; inset: 0; width: 100%; height: 100%; }
-
-    /* Foreground curtain legs — the house drape at the proscenium, pulled to the
-       sides. z above the musicians, so the orchestra plays *behind* them and any
-       performer straying to the edge is framed/occluded (true depth). */
-    .curtain { position: absolute; top: 0; height: 100%; width: auto; z-index: 1100;
-      pointer-events: none; }
-    .curtain.left  { left: 0; }
-    .curtain.right { right: 0; transform: scaleX(-1); }
 
     /* Musicians: bottom-center anchored on the floor line; sprite height is set
        in px from JS (a % of the stage), so the whole arc scales as one. */
@@ -54,20 +53,19 @@
       100% { opacity: 0; transform: translate(-50%, -260%) scale(1.2); }
     }
 
-    /* Conductor's podium sits downstage-centre, in front of the whole orchestra;
-       the wand hovers above it and lights up when a real wand connects. */
-    #conductor { position: absolute; left: 50%; bottom: 13%; transform: translateX(-50%); z-index: 1000; }
-    #podium { display: block; width: auto; }
-    #wand { position: absolute; left: 50%; bottom: 26%; width: auto; z-index: 1010;
+    /* The wand stands front-and-centre below the row; bobs, and lights up when a
+       real wand connects. */
+    #wand { position: absolute; left: 50%; bottom: 5%; width: auto; z-index: 50;
       transform-origin: center bottom; animation: bob 2.6s ease-in-out infinite; transition: filter 200ms; }
     @keyframes bob {
       0%, 100% { transform: translate(-50%, 0) rotate(-5deg); }
-      50%      { transform: translate(-50%, -16%) rotate(5deg); }
+      50%      { transform: translate(-50%, -14%) rotate(5deg); }
     }
     #wand.armed { filter: drop-shadow(0 0 6px #ffd76a) drop-shadow(0 0 13px #ff9d3c); }
 
-    /* HUD + join card framed by the generated ui_panel border. */
-    .panel { border-image: url(../assets/ui_panel.png) 24 fill / 24px stretch; }
+    /* Flat HUD / join card panels (replaces the old ui_panel border-image). */
+    .panel { background: rgba(9,13,20,.86); border: 2px solid #34405c; border-radius: 10px;
+      box-shadow: 0 6px 22px rgba(0,0,0,.42); }
     #hud { position: fixed; top: 14px; left: 14px; width: 250px; padding: 24px 20px 18px;
       font-size: 12px; line-height: 1.5; }
     #hud h1 { font-size: 14px; letter-spacing: .06em; color: #ffd76a; text-shadow: 0 1px 2px #000; margin-bottom: 4px; }
@@ -119,14 +117,9 @@
 </head>
 <body>
   <div id="stagewrap">
-    <img id="bg" src="../assets/hall_back.png" alt="stage">
     <div id="players"></div>
     <div id="fx"></div>
-    <div id="conductor"><img id="podium" src="../assets/podium.png" alt="podium"></div>
     <img id="wand" src="../assets/wand.png" alt="wand">
-    <!-- Foreground house curtains (in front of the orchestra) -->
-    <img class="curtain left" src="../assets/curtain_side.png" alt="">
-    <img class="curtain right" src="../assets/curtain_side.png" alt="">
   </div>
 
   <div id="hud" class="panel">
@@ -140,9 +133,9 @@
       <button id="stop" class="stop">■ Stop</button>
       <button id="panic" class="warn">✷ off</button>
     </div>
-    <div class="row" style="margin-top:10px; font-size:11px; gap:14px">
+    <a href="../editor/" target="_blank" style="display:block; margin-top:12px; text-align:center; cursor:pointer; text-decoration:none; font-size:12px; font-weight:700; letter-spacing:.04em; padding:9px 6px; color:#1a120a; background:#ffd76a; border-radius:3px">🎛 OPEN EDITOR</a>
+    <div class="row" style="margin-top:8px; font-size:11px; justify-content:center">
       <a href="../guide/" target="_blank" style="color:#ffca6b; text-decoration:none">📖 how it works</a>
-      <a href="../editor/" target="_blank" style="color:#ffca6b; text-decoration:none">🎛 editor</a>
     </div>
   </div>
 

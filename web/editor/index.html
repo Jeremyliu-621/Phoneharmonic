@@ -34,6 +34,10 @@
     .stat .k { font-size: 11px; opacity: 0.5; text-transform: uppercase; }
     #bars { display: flex; gap: 3px; height: 26px; align-items: flex-end; margin-top: 0.5rem; }
     #bars .b { flex: 1; background: #ffd76a; border-radius: 2px 2px 0 0; height: 4px; transition: height 0.2s; }
+    .drop { margin-top: 0.75rem; padding: 1.1rem; text-align: center; cursor: pointer;
+      border: 2px dashed #6a5230; border-radius: 10px; color: #cdb894; background: #100b07; transition: all .15s; }
+    .drop:hover, .drop.over { border-color: #ffd76a; color: #ffe9a8; background: #1a1206; }
+    .tag { display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 999px; background: #3a2c15; color: #ffd76a; }
   </style>
 </head>
 <body>
@@ -42,6 +46,20 @@
   <div class="muted" style="margin-top:0.25rem">
     audience view: <a href="../stage/" target="_blank">stage →</a> ·
     how it works: <a href="../guide/" target="_blank">guide →</a>
+  </div>
+
+  <div class="card">
+    <h2>Song</h2>
+    <div class="row" style="justify-content:space-between; align-items:baseline">
+      <span class="big" id="songname">—</span>
+      <span class="muted" id="songmeta"></span>
+    </div>
+    <div id="drop">⬇ Drop a <b>.mid</b> file here, or click to choose one</div>
+    <input type="file" id="midifile" accept=".mid,.midi" hidden>
+    <table style="margin-top:0.75rem">
+      <thead><tr><th></th><th>track</th><th>instrument</th><th>notes</th></tr></thead>
+      <tbody id="tracks"><tr><td colspan="4" class="muted">using the built-in song — drop a MIDI to replace it</td></tr></tbody>
+    </table>
   </div>
 
   <div class="card">

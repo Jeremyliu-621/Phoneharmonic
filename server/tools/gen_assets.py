@@ -42,59 +42,79 @@ OUT_DIR = REPO_DIR / "web" / "assets"
 TOKEN_FILE = SERVER_DIR / "tools" / "rd_token.txt"
 
 # --- shared aesthetic knobs -------------------------------------------------
-# "Wand Maestro": a magical 16-bit concert — cute chibi musicians on a dark
-# stage, warm footlights + a glowing magic wand. One style + suffix + seed keep
-# every sprite in the same world.
-MODEL = "rd_plus__default"          # quality tier for the hero pass; swap to rd_fast__default for cheap bulk
-SEED = 7777
-SUFFIX = ("16-bit SNES JRPG pixel art, cute chibi proportions, clean crisp pixels, "
-          "warm stage footlights with cool magical glow, dark navy background")
+# Wand Maestro, GRAND & EXTRAVAGANT: a lavish 2D theater — gilded proscenium,
+# deep red velvet curtains that part, dramatic spotlights, a glowing chandelier,
+# sparkles, an ornate marquee. Rich detail, warm magical glow. The front-facing
+# musicians (kept from the flat pass) perform in a straight row; the stage around
+# them is opulent.
+MODEL = "rd_plus__default"
+SEED = 909
+SUFFIX = ("ornate luxurious highly detailed pixel art, dramatic theatrical stage lighting, "
+          "gold filigree, deep red velvet, warm magical glow, elegant, beautiful, 16-bit")
 
 # name -> (prompt, width, height, remove_bg, style_override|None, tile)
 ASSETS: dict[str, tuple] = {
-    # --- Layered stage: composites in z-order back->front so nothing floats and
-    # the curtains genuinely frame (and occlude) the musicians. Replaces bg_stage.
-    "hall_back": ("empty theater stage interior seen from the audience: deep midnight-blue "
-                  "back wall with a few faint golden stars, a warm spotlit wooden plank stage "
-                  "floor receding backward, soft rim light. NO curtains, no drapes, no arch, "
-                  "no columns, no audience seats — a bare simple stage",
-                  448, 256, False, "rd_plus__environment", False),
-    "curtain_side": ("one tall luxurious deep red velvet theater side curtain hanging down the "
-                     "LEFT edge, gathered and draped with a gold rope tie and tassel, ornate gold "
-                     "trim, a single isolated curtain panel and nothing else",
-                     112, 256, True, None, False),
-    "valance": ("a deep red velvet theater curtain valance swag with gold fringe and tassels "
-                "draped across the very top, ornate pelmet, empty space below it, a single "
-                "isolated object at the top and nothing else", 448, 128, True, None, False),
-    "seats": ("two rows of empty theater audience seats, dark red velvet chairs seen from "
-              "behind along the bottom, empty space above them, a single isolated row of "
-              "seats and nothing else", 448, 128, True, None, False),
+    # ---- The grand stage (two backdrop variants to pick the best) ----
+    "backdrop": ("a breathtaking opulent empty grand theater stage interior seen head on, a "
+                 "gilded ornate proscenium, a deep sapphire-blue back wall with a painted golden "
+                 "starry mural, warm dramatic spotlights, a polished parquet wood stage floor, "
+                 "majestic and luxurious, no people", 448, 256, False, "rd_plus__environment", False),
+    "backdrop_b": ("an opulent grand concert hall stage interior seen head on, ornate gold and "
+                   "crimson baroque decor, glowing warm chandeliers, rich marble columns, deep red "
+                   "and gold, polished stage floor, majestic, cinematic lighting, no people",
+                   448, 256, False, "rd_plus__environment", False),
 
-    # Backdrop (no transparency; tileable left-right so we can pan/repeat it).
-    "bg_stage": ("empty grand concert hall stage seen from the audience, red velvet "
-                 "curtains, wooden floor, spotlights, magical particles in the air, "
-                 "wide scenic environment", 448, 256, False, "rd_plus__environment", False),
+    # ---- Intro curtains: the LEFT half drape (mirrored in CSS for the right) + top valance ----
+    "curtain_half": ("an enormous luxurious deep red velvet stage curtain drape covering the LEFT "
+                     "half, heavy rich vertical folds, gold braid trim and tassels, a single "
+                     "isolated curtain panel, plain background", 256, 256, True, None, False),
+    "valance": ("a grand ornate deep red velvet theater curtain valance swag pelmet across the top, "
+                "scalloped, heavy gold fringe and tassels, a single isolated object, plain background",
+                256, 144, True, None, False),
 
-    # One chibi musician per instrument family (transparent — composited on the stage).
-    "violin":  ("a cute chibi musician playing a violin", 128, 160, True, None, False),
-    "cello":   ("a cute chibi musician playing a cello", 128, 160, True, None, False),
-    "flute":   ("a cute chibi musician playing a flute", 128, 160, True, None, False),
-    "trumpet": ("a cute chibi musician playing a trumpet", 128, 160, True, None, False),
-    "drums":   ("a cute chibi musician playing a drum kit", 128, 160, True, None, False),
-    "piano":   ("a cute chibi musician playing a grand piano keyboard", 128, 160, True, None, False),
-    "harp":    ("a cute chibi musician playing a harp", 128, 160, True, None, False),
-    "synth":   ("a cute chibi musician playing a glowing neon synthesizer keyboard", 128, 160, True, None, False),
+    # ---- Lights, sparkle & signage (the extravagance) ----
+    "chandelier": ("a magnificent ornate golden crystal chandelier glowing with warm candlelight, "
+                   "hanging, sparkling, a single isolated object, plain black background",
+                   128, 160, True, None, False),
+    "spotlight": ("a soft translucent cone of warm golden stage spotlight beam shining downward, a "
+                  "glowing light ray, a single isolated beam on a plain black background",
+                  128, 224, True, None, False),
+    "sparkle": ("a glowing magical golden sparkle star with light rays, a single isolated object, "
+                "plain black background", 64, 64, True, None, False),
+    "marquee": ("an ornate golden art-deco theater marquee sign framed with round glowing "
+                "lightbulbs, a blank empty dark center panel, a single isolated object, plain "
+                "background", 224, 128, True, None, False),
 
-    # Conductor-side props.
-    "wand":    ("a magical conductor's wand with a glowing star tip, sparkles, "
-                "single item, plain background", 128, 128, True, None, False),
-    "podium":  ("a wooden conductor's podium with a music stand, single object", 128, 128, True, None, False),
+    # ---- Props ----
+    "podium": ("an ornate gilded conductor's podium with a music stand and deep red velvet, a "
+               "single isolated object, plain background", 128, 128, True, None, False),
+    "wand2": ("a magnificent ornate magic conductor's wand with a glowing five-point golden star "
+              "tip trailing sparkles, a single isolated object, plain background",
+              96, 160, True, None, False),
 
-    # VFX + UI.
-    "note_pulse": ("a single glowing golden musical note bursting with light, sparkles",
-                   64, 64, True, None, False),
-    "ui_panel":   ("a fantasy game UI panel frame, ornate border, empty middle, dark",
-                   256, 128, False, "rd_plus__ui_element", False),
+    # Front-facing, full-body musicians (transparent; placed in a flat row).
+    "violin":  ("a cute cartoon musician standing upright facing straight forward, playing a violin, "
+                "full body head to toe, symmetrical, isolated on a plain flat background", 128, 176, True, None, False),
+    "cello":   ("a cute cartoon musician standing upright facing straight forward, playing a cello, "
+                "full body head to toe, symmetrical, isolated on a plain flat background", 128, 176, True, None, False),
+    "flute":   ("a cute cartoon musician standing upright facing straight forward, playing a flute, "
+                "full body head to toe, symmetrical, isolated on a plain flat background", 128, 176, True, None, False),
+    "trumpet": ("a cute cartoon musician standing upright facing straight forward, playing a trumpet, "
+                "full body head to toe, symmetrical, isolated on a plain flat background", 128, 176, True, None, False),
+    "drums":   ("a cute cartoon musician standing facing straight forward behind a small drum kit, "
+                "full body, symmetrical, isolated on a plain flat background", 128, 176, True, None, False),
+    "piano":   ("a cute cartoon musician standing facing straight forward at a keyboard piano, "
+                "full body, symmetrical, isolated on a plain flat background", 128, 176, True, None, False),
+    "harp":    ("a cute cartoon musician standing upright facing straight forward, playing a harp, "
+                "full body head to toe, symmetrical, isolated on a plain flat background", 128, 176, True, None, False),
+    "synth":   ("a cute cartoon musician standing facing straight forward at a neon synthesizer keyboard, "
+                "full body, symmetrical, isolated on a plain flat background", 128, 176, True, None, False),
+
+    # Wand + note VFX.
+    "wand": ("a magic wand with a five-point star tip and little sparkles, single object, "
+             "isolated on a plain flat background", 96, 128, True, None, False),
+    "note": ("a single golden eighth music note, single object, isolated on a plain flat background",
+             64, 64, True, None, False),
 }
 
 

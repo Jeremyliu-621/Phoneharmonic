@@ -36,6 +36,17 @@ class Conductor:
         self._sections: list[SectionInfo] = []
         self._cancels: list[CancelSpec] = []
         self._ids = itertools.count(1)
+        self._tracks: list[dict] = []                    # parts of a loaded MIDI (for the editor)
+        self._reanchor = False                           # re-align the bar cursor on the next pull
+
+    def load_song(self, song, tracks: list[dict] | None = None) -> None:
+        self.song = song
+        self._tracks = tracks or []
+        self.set_tempo(song.bpm)
+        self._last_choice = None
+        self._reanchor = True   # start the new song cleanly at the next scheduler tick
+        log.info("loaded song '%s': %d bars, key=%d, %d parts",
+                 song.name, len(song.bars), song.key_root, len(self._tracks))
 
     # --- editor controls ---
     def set_tempo(self, bpm: float) -> None:
@@ -54,6 +65,10 @@ class Conductor:
             "last_choice": self._last_choice,
             "candidates": list(GENERATORS),
             "gesture": self._gesture.as_dict() if self._gesture else None,
+            "song": self.song.name,
+            "key_root": self.song.key_root,
+            "bars": len(self.song.bars),
+            "tracks": self._tracks,
         }
 
     # --- transport ---
@@ -89,6 +104,10 @@ class Conductor:
     def get_events(self, now_ms: float, until_ms: float) -> list[NoteEvent]:
         if not self._playing:
             return []
+        if self._reanchor:                       # a freshly loaded song starts here
+            self._next_bar_start = now_ms + 100.0
+            self._next_bar_idx = 0
+            self._reanchor = False
         events: list[NoteEvent] = []
         while self._next_bar_start <= until_ms:
             if self._next_bar_start >= now_ms - self.bar_ms:
