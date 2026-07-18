@@ -90,9 +90,10 @@ class Scheduler:
         status = getattr(self._engine, "status", None)
         if status:
             st = status()
-            if st.get("last_choice") != self._seen_choice:
-                self._seen_choice = st.get("last_choice")
+            if (st.get("last_choice"), st.get("decision_source")) != self._seen_choice:
+                self._seen_choice = (st.get("last_choice"), st.get("decision_source"))
                 await self._hub.broadcast({
                     "t": ENGINE_STATE, "last_choice": st["last_choice"], "gesture": st["gesture"],
+                    "decision_source": st.get("decision_source"),
                     "playing": st["playing"], "bpm": st["bpm"], "song": st["song"],
                 }, roles=("stage", "admin"))

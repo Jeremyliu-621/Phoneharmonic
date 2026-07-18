@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Model Test — Wand Maestro</title>
+<style>
+  body { background: #0a0a0a; color: #ddd; font-family: ui-monospace, monospace;
+         margin: 0; padding: 24px; display: flex; flex-direction: column; gap: 18px; }
+  h1 { font-size: 15px; color: #888; margin: 0; font-weight: normal; }
+  button { background: #1a1a1a; color: #ddd; border: 1px solid #444; border-radius: 8px;
+           padding: 14px 18px; font: inherit; font-size: 16px; cursor: pointer; }
+  button:hover { border-color: #888; }
+  #transport button { font-size: 20px; padding: 16px 28px; }
+  #gestures { display: flex; flex-wrap: wrap; gap: 10px; }
+  #gestures button { font-size: 18px; padding: 20px 24px; }
+  #choice { font-size: 64px; font-weight: bold; letter-spacing: 1px; min-height: 80px; }
+  #source { font-size: 22px; }
+  #source.model { color: #6fcf7f; } #source.heuristic { color: #e5a23d; }
+  #meta, #feat { color: #888; font-size: 14px; }
+  #log { color: #666; font-size: 13px; max-height: 180px; overflow-y: auto; }
+  label { color: #888; font-size: 14px; }
+</style>
+</head>
+<body>
+  <h1>MODEL TEST — no webcam, no stage. Press START, then fire gestures and watch/listen.</h1>
+  <div id="transport">
+    <button id="start">▶ START</button>
+    <button id="stop">⏹ stop</button>
+    <label><input type="checkbox" id="mute"> mute melody (hear only the model's choice)</label>
+  </div>
+  <div id="gestures"></div>
+  <div>
+    <div id="choice">—</div>
+    <div id="source">waiting…</div>
+    <div id="meta"></div>
+    <div id="feat"></div>
+  </div>
+  <div id="log"></div>
+  <script type="module" src="./test.js"></script>
+</body>
+</html>
