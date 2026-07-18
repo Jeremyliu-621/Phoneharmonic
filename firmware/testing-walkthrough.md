@@ -98,6 +98,11 @@ roster (you'll see the CV app listed as `admin`) and the live mode.
 each produce the matching `↗` line **and** a matching server console line. If
 this works, the entire CV→server path is proven.
 
+The server also logs the debounced recognizer state whenever it changes, for
+example: `cv state client=… gesture=TWO_FINGERS mode=DETERMINISTIC confidence=96%`.
+When the gesture is released it logs `gesture=NONE` while preserving the sticky
+current mode.
+
 > Tip: to point the CV page at a server on another machine (e.g. the laptop from
 > a second computer), add `?ws=`:
 > `http://127.0.0.1:8765/?ws=ws://172.20.10.3:8080/ws`
