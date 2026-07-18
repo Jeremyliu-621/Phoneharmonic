@@ -184,7 +184,7 @@ reconnects forever and drops malformed lines with a note.
 **MCU sketch shape for this path** (pseudo-Arduino):
 
 ```cpp
-#include <Modulino.h>
+#include <Arduino_Modulino.h>
 ModulinoMovement imu;
 
 void setup() {
@@ -330,7 +330,7 @@ but we can skip them:
 
 ## So, concretely, what to build
 
-1. **MCU sketch** (`firmware/uno_q/wand_mcu/wand_mcu.ino`):
+1. **MCU sketch** (`firmware/uno_q/wand/sketch/sketch.ino`):
    - Init Modulino Movement on **`Wire1`** (the Qwiic connector is Wire1 on the
      UNO Q, not Wire), address `0x6A`.
    - Sample at ~60 Hz. Convert accel g → m/s² (×9.81, keep gravity). Read gyro

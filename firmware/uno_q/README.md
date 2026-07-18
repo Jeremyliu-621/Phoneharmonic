@@ -1,8 +1,9 @@
 # UNO Q Wand Firmware
 
 This is the firmware for the physical wand — an **Arduino UNO Q + Modulino
-Movement (IMU)**. The wand is the conductor's instrument: you wave it and point
-it, and the laptop turns that into music across the room's phones.
+Movement (IMU) + Modulino Distance (ToF)**. The wand is the conductor's
+instrument: you wave it, point it, and raise/lower it, and the laptop turns
+that into music across the room's phones.
 
 The important thing to know up front: the UNO Q is **two computers on one board**.
 There's a small real-time microcontroller *and* a full little Linux computer with
@@ -10,16 +11,16 @@ WiFi, sitting side by side and talking over an on-board channel. Our code is spl
 to match that hardware, which is why there are two folders here.
 
 ```
-         wand_mcu/  (microcontroller)        linux/  (on-board Linux + WiFi)
+      wand/sketch/  (microcontroller)     wand/python/  (Linux + WiFi)
         ┌──────────────────────────┐       ┌──────────────────────────────┐
  IMU ──►│ read the sensor, drive    │──────►│ package readings, hold the    │──► laptop
         │ the LED/buzzer            │◄──────│ WiFi connection to the laptop │◄── server
         └──────────────────────────┘       └──────────────────────────────┘
 ```
 
-## `wand_mcu/` — the microcontroller half
+## `wand/sketch/` — the microcontroller half
 
-This is the "classic Arduino" part: a single sketch (`wand_mcu.ino`) running on
+This is the "classic Arduino" part: a single sketch (`sketch/sketch.ino`) running on
 the real-time chip. It's great at doing one small thing very steadily, and that's
 all we ask of it. Two responsibilities:
 
@@ -35,7 +36,7 @@ know anything about the music. It's a sensor-and-lights device. All the smarts
 live on the laptop. Keeping the microcontroller dumb is intentional — it's the
 part that has to stay rock-solid at a steady sample rate.
 
-## `linux/` — the on-board Linux half (the networking brain)
+## `wand/python/` — the on-board Linux half (the networking brain)
 
 The microcontroller can't do WiFi, so this is the piece that actually talks to
 the laptop. It's a small Python program running on the UNO Q's built-in Linux
@@ -54,8 +55,8 @@ The folder is a handful of small files, each with a clear role: one owns the WiF
 connection and the message plumbing, one holds the current "what's the wand's
 state" snapshot, one tracks which phone is selected, one is a placeholder for a
 future on-device AI feature we haven't built yet, and one config file with things
-like the laptop's address. There's a single entry point (`run.py`) that wires them
-together and is what gets launched on the board.
+like the laptop's address. There's a single entry point (`python/main.py`) that
+wires them together and is what Arduino App Lab launches on the board.
 
 ## How they fit together
 
@@ -76,3 +77,11 @@ bridge process. Plug it in, it joins, and it starts streaming.
 - `firmware/uno_q/TEST_PLAN.md` — step-by-step checks to confirm it all works.
 - `firmware/uno_q/stream_probe/` — isolated, one-command physical test of
   Movement → Bridge → onboard Linux → WiFi → production server streaming.
+
+## Deploying
+
+`wand/` is a self-contained **Arduino App Lab app** — `wand/app.yaml` +
+`wand/sketch/` (MCU) + `wand/python/` (Linux), the same layout as `stream_probe/`.
+Set the laptop address before running: `WAND_LAPTOP_IP=192.168.137.1` (the app
+reads it in `wand/python/config.py`). Open `wand/` in App Lab and Run, or deploy
+headless with `arduino-app-cli`.

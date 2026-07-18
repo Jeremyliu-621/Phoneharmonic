@@ -39,7 +39,7 @@ terminal for every hardware test — it's the observation window for both direct
 
 ### T1.1 — IMU sampling & units are correct
 **Proves:** the Modulino reads, and accel is m/s² **with gravity**, gyro is raw deg/s — the #1 thing that silently breaks everything downstream.
-**How:** temporarily enable the serial debug print in `wand_mcu.ino` (or read the values via T3). Hold the board flat and still.
+**How:** temporarily enable the serial debug print in `sketch/sketch.ino` (or read the values via T3). Hold the board flat and still.
 **Pass:** at rest, the gravity axis reads **≈9.8** (not ≈1.0 → you forgot ×9.81; not ≈0 → you subtracted gravity), the other two accel axes ≈0, all three gyro axes **≈0**. Rotating the board makes the matching gyro axis spike to tens/hundreds deg/s and return to ~0 when still.
 
 ---
@@ -48,7 +48,7 @@ terminal for every hardware test — it's the observation window for both direct
 
 ### T2.1 — Wand connects over WiFi
 **Proves:** handshake works; the board owns the wand slot.
-**How:** power the board, start `run.py`, watch the server log and the monitor.
+**How:** power the board, start `python/main.py`, watch the server log and the monitor.
 **Pass:** server logs `wand connected (variant=hw)`; monitor prints `roster: wand connected=True variant=hw`.
 
 ### T2.2 — Accelerometer/IMU data is streaming to the server
@@ -87,7 +87,7 @@ terminal for every hardware test — it's the observation window for both direct
 
 ### T3.4 — Board syncs state on connect (initial snapshot)
 **Proves:** a board joining mid-show immediately learns the current state.
-**How:** press `s` (show playing), then power-cycle or restart `run.py` on the board.
+**How:** press `s` (show playing), then power-cycle or restart `python/main.py` on the board.
 **Pass:** within a second of reconnecting, the board's play LED shows **solid** (playing) without you pressing anything — the server pushed a `wand.cmd` snapshot right after `welcome`.
 
 ### T3.5 — Reconnect resilience

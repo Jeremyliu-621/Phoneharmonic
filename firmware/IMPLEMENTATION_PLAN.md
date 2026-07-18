@@ -114,7 +114,7 @@ invisible to phones/stage.
 
 ---
 
-## Part B — MCU sketch: `firmware/uno_q/wand_mcu/wand_mcu.ino`
+## Part B — MCU sketch: `firmware/uno_q/wand/sketch/sketch.ino`
 
 Pure sensor loop **plus** a downlink reflector. No classification, no yaw
 integration on-board (the server integrates `gz`).
@@ -140,7 +140,7 @@ integration on-board (the server integrates `gz`).
 
 ---
 
-## Part C — Linux uplink + downlink: `firmware/uno_q/linux/wand_link.py`
+## Part C — Linux uplink + downlink: `firmware/uno_q/wand/python/wand_link.py`
 
 The heart of the WiFi build. Mirrors `server/tools/wand_bridge.py:37-67`'s
 handshake/forward logic, but runs **on the board** and is bidirectional. Uses
@@ -160,11 +160,11 @@ handshake/forward logic, but runs **on the board** and is bidirectional. Uses
   - `phone_select.on_cmd(state)` and `ai_mode.on_state(state)`.
   Ignore `welcome`/`clock.pong`/`err` (log `err`).
 - **Shared state:** a tiny `WandState` dataclass (`playing`, `mode`, `aim`,
-  `client_id`) in `firmware/uno_q/linux/state.py`, passed to the helpers.
+  `client_id`) in `firmware/uno_q/wand/python/state.py`, passed to the helpers.
 
 ---
 
-## Part D — AI-mode scaffold: `firmware/uno_q/linux/ai_mode.py`
+## Part D — AI-mode scaffold: `firmware/uno_q/wand/python/ai_mode.py`
 
 Placeholder framed for **future on-device inference** (not wired to affect audio
 yet — the server's Freesolo decision/bar models stay authoritative).
@@ -185,7 +185,7 @@ changing current behavior.
 
 ---
 
-## Part E — Phone selection: `firmware/uno_q/linux/phone_select.py`
+## Part E — Phone selection: `firmware/uno_q/wand/python/phone_select.py`
 
 Selection itself is **server-side** (yaw→azimuth lock within 40°,
 `server/wandio.py:80-117`). The board doesn't decide *which* phone — it **tracks
@@ -210,10 +210,10 @@ class PhoneSelect:
 
 ## Part F — Config + entrypoint
 
-- **`firmware/uno_q/linux/config.py`** — `LAPTOP_IP` (LAN IP the phones use;
+- **`firmware/uno_q/wand/python/config.py`** — `LAPTOP_IP` (LAN IP the phones use;
   server logs it via `detect_lan_ip`, `main.py:83-105`), `SESSION = "lol1"`,
   `WS_PORT = 8080`, `BATCH = 5`, `MODEL_PATH = None`.
-- **`firmware/uno_q/linux/run.py`** — asyncio entrypoint: build `WandState`,
+- **`firmware/uno_q/wand/python/main.py`** — asyncio entrypoint: build `WandState`,
   `AiMode`, `PhoneSelect`, start `wand_link` (which owns the WebSocket + Bridge
   wiring), run forever. This is what Arduino App Lab launches on the Linux side.
 
@@ -222,14 +222,14 @@ class PhoneSelect:
 ## Files to create / modify
 
 ```
-firmware/uno_q/wand_mcu/wand_mcu.ino          NEW  (Part B)
-firmware/uno_q/linux/run.py                    NEW  (Part F entrypoint)
-firmware/uno_q/linux/wand_link.py              NEW  (Part C — WS + Bridge)
-firmware/uno_q/linux/ai_mode.py                NEW  (Part D — scaffold)
-firmware/uno_q/linux/phone_select.py           NEW  (Part E)
-firmware/uno_q/linux/state.py                  NEW  (WandState dataclass)
-firmware/uno_q/linux/config.py                 NEW  (Part F config)
-firmware/uno_q/linux/requirements.txt          NEW  (websockets)
+firmware/uno_q/wand/sketch/sketch.ino          NEW  (Part B)
+firmware/uno_q/wand/python/main.py                    NEW  (Part F entrypoint)
+firmware/uno_q/wand/python/wand_link.py              NEW  (Part C — WS + Bridge)
+firmware/uno_q/wand/python/ai_mode.py                NEW  (Part D — scaffold)
+firmware/uno_q/wand/python/phone_select.py           NEW  (Part E)
+firmware/uno_q/wand/python/state.py                  NEW  (WandState dataclass)
+firmware/uno_q/wand/python/config.py                 NEW  (Part F config)
+firmware/uno_q/wand/python/requirements.txt          NEW  (websockets)
 server/protocol.py                             EDIT (A1: WAND_CMD)
 web/shared/protocol.js                         EDIT (A2: mirror)
 server/main.py                                 EDIT (A3: _notify_wand + 4 sites)
@@ -247,7 +247,7 @@ server/main.py                                 EDIT (A3: _notify_wand + 4 sites)
    (or watch with a scratch WS client joined as role `wand`). Trigger: palm
    pause → expect `{playing:false}`; fist toggle → `{mode:"det"}`; point the
    wand → `{aim:"s2"}`. Confirm one snapshot arrives right after `welcome`.
-3. **Board uplink** — flash the MCU sketch, run `run.py` on the UNO Q Linux side
+3. **Board uplink** — flash the MCU sketch, run `python/main.py` on the UNO Q Linux side
    pointed at `LAPTOP_IP`. Wave the wand; server log should print `wand.imu`
    frames and aim changes. Validate the **sensor math** first: accel ≈ 9.8 on the
    down axis at rest (gravity included), gyro ≈ 0 at rest.

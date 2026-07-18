@@ -1,4 +1,4 @@
-// wand_mcu.ino — UNO Q microcontroller side of the Phoneharmonic wand.
+// sketch.ino — UNO Q microcontroller side of the Phoneharmonic Wand (App Lab).
 //
 // Two jobs, no decisions:
 //   UPLINK   sample the Modulino Movement IMU ~60 Hz, convert to the server's
@@ -11,19 +11,20 @@
 // state machine — the laptop server does all of that (see firmware/BACKEND_NOTES.md).
 //
 // MCU<->Linux Bridge contract (kept CSV so the MCU needs no JSON parser):
-//   MCU  -> Linux  topic "imu": "tw,ax,ay,az,gx,gy,gz"   (one frame per notify)
-//   Linux -> MCU   topic "cmd": "playing,mode,aim"       e.g. "1,det,s2"
+//   MCU  -> Linux  topic "imu":   "tw,ax,ay,az,gx,gy,gz"  (one frame per notify)
+//   MCU  -> Linux  topic "range": "mm"   ToF distance ~10 Hz -> server wand.range
+//   Linux -> MCU   topic "cmd":   "playing,mode,aim"      e.g. "1,det,s2"
 //                                playing = 0|1, mode = ai|det, aim = section id or ""
 //
-// NOTE: the Bridge + Modulino API names below follow firmware/BACKEND_NOTES.md.
-// Verify them against the installed Arduino `Modulino` + App Lab `Bridge`
-// libraries on real hardware before trusting the build. Documented fallback if
-// Bridge fights us: CSV-over-Serial between the MCU and Linux (same payloads).
+// NOTE: includes + the Bridge/Modulino API match the TESTED stream_probe app
+// (Arduino_RouterBridge + Arduino_Modulino, pinned in sketch/sketch.yaml).
+// Documented fallback if Bridge fights us: CSV-over-Serial (same payloads).
 
-#include <Modulino.h>
-#include <Bridge.h>
+#include <Arduino_Modulino.h>
+#include <Arduino_RouterBridge.h>
 
 ModulinoMovement imu;
+ModulinoDistance dist;   // Modulino Distance (ToF) @ 0x29 on the same Qwiic chain
 
 // ---- feedback pins (optional; safe no-ops if nothing is wired) ----
 static const int PIN_LED_PLAY = LED_BUILTIN;  // solid = playing, blink = paused
@@ -66,9 +67,11 @@ void setup() {
   pinMode(PIN_LED_MODE, OUTPUT);
   pinMode(PIN_BUZZER, OUTPUT);
 
-  Wire1.begin();                 // Qwiic connector is Wire1 on the UNO Q, NOT Wire
-  Modulino.begin(Wire1);
+  Modulino.begin();              // UNO Q auto-selects the Qwiic bus (matches the tested
+                                 // stream_probe). If a sensor isn't found, the documented
+                                 // alternative is Modulino.begin(Wire1) — see hardware-wand.md.
   imu.begin();                   // Modulino Movement @ 0x6A
+  dist.begin();                  // Modulino Distance (ToF) @ 0x29
 
   Bridge.begin();
   Bridge.provide("cmd", onCmd);  // receive reflected show state from Linux
@@ -91,6 +94,20 @@ void loop() {
              imu.getX() * G, imu.getY() * G, imu.getZ() * G,
              imu.getRoll(), imu.getPitch(), imu.getYaw());
     Bridge.notify("imu", line);  // Linux batches ~5 of these into one wand.imu
+  }
+
+  // Distance (ToF) at ~10 Hz -> Linux -> wand.range (proximity "squish").
+  static unsigned long lastRange = 0;
+  if (millis() - lastRange >= 100) {
+    lastRange = millis();
+    if (dist.available()) {
+      float mm = dist.get();
+      if (mm == mm) {              // reject NaN (invalid ToF reading)
+        char rline[24];
+        snprintf(rline, sizeof(rline), "%.0f", mm);
+        Bridge.notify("range", rline);
+      }
+    }
   }
 
   // Paused = blink the play LED at ~2 Hz so the DJ can see the show is stopped.

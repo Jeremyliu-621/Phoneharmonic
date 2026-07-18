@@ -40,6 +40,7 @@ class WandLink:
         self._buf: deque[list[float]] = deque()
         self._lock = threading.Lock()
         self._seq = 0
+        self._range: float | None = None    # latest ToF mm from the MCU, if new
 
     # --- MCU uplink ingress (Bridge callback; may fire off-thread) ---
     def _on_imu(self, payload) -> None:
@@ -54,6 +55,18 @@ class WandLink:
                 return None
             return [self._buf.popleft() for _ in range(n)]
 
+    # --- MCU range ingress (ToF) ---
+    def _on_range(self, payload) -> None:
+        mm = _parse_range(payload)
+        if mm is not None:
+            with self._lock:
+                self._range = mm
+
+    def _take_range(self) -> float | None:
+        with self._lock:
+            mm, self._range = self._range, None
+            return mm
+
     # --- MCU downlink egress ---
     def _push_to_mcu(self) -> None:
         if Bridge is not None:
@@ -64,10 +77,15 @@ class WandLink:
         if self._ws is not None:
             await self._ws.send(json.dumps(obj))
 
-    # --- main loop: reconnect forever ---
-    async def run(self) -> None:
+    def register_bridge(self) -> None:
+        """Register the MCU uplink providers. Call once on the main thread before
+        App.run() — the Arduino Bridge runtime services these callbacks."""
         if Bridge is not None:
             Bridge.provide("imu", self._on_imu)
+            Bridge.provide("range", self._on_range)
+
+    # --- main loop: reconnect forever ---
+    async def run(self) -> None:
         self._ws = None
         while True:
             try:
@@ -95,11 +113,17 @@ class WandLink:
 
     async def _uplink(self, ws) -> None:
         while True:
+            sent = False
             frames = self._drain(config.BATCH)
             if frames is not None:
                 self._seq += 1
                 await ws.send(json.dumps({"t": "wand.imu", "seq": self._seq, "frames": frames}))
-            else:
+                sent = True
+            mm = self._take_range()
+            if mm is not None:
+                await ws.send(json.dumps({"t": "wand.range", "mm": mm}))
+                sent = True
+            if not sent:
                 await asyncio.sleep(0.005)
 
     async def _downlink(self, ws) -> None:
@@ -130,3 +154,14 @@ def _parse_imu_csv(payload) -> list[float] | None:
         return [float(x) for x in parts]
     except (ValueError, TypeError, AttributeError):
         return None
+
+
+def _parse_range(payload) -> float | None:
+    """Parse the MCU's distance payload ("mm") into a float, dropping NaN."""
+    if isinstance(payload, (bytes, bytearray)):
+        payload = payload.decode("utf-8", "replace")
+    try:
+        mm = float(payload)
+    except (ValueError, TypeError):
+        return None
+    return mm if mm == mm else None
