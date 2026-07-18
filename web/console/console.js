@@ -61,7 +61,12 @@ const notes = [];                    // bottom-roll notes
 const seen = new Set();
 const secInstrument = new Map();     // section id -> instrument (roll colours)
 let lastChoice = null;
+let curSong = null;                  // engine song identity (clears the drop's busy state)
+let lastSong = null;                 // last engine song name (drop-zone reset trigger)
 let dragging = null;                 // {key, moved, lastSend} during a card drag
+
+// reset the MIDI drop zone once a freshly loaded song actually lands
+function onSongChanged() { if (typeof dropIdle === "function") dropIdle(); }
 
 // ── room coordinates: px ∈ [-1,1], py ∈ [0,1], hub at (0, 0.5) = map centre ──
 function roomBox() { const r = el("room").getBoundingClientRect(); return r; }
@@ -296,7 +301,9 @@ function applyEngine(eng) {
   const bpm = Math.round(eng.bpm);
   bpmNow = bpm;
   el("bpmlbl").textContent = bpm; el("bpmcell").textContent = bpm;
+  if (eng.song && eng.song !== lastSong) { lastSong = eng.song; onSongChanged(); }
   el("songname").textContent = eng.song || "—";
+  if (eng.song !== curSong) { curSong = eng.song; dropIdle(); }   // new song landed
   el("barslbl").textContent = eng.bars ? eng.bars + " bars" : "";
   if (eng.transport) transport = eng.transport;
   engineAimed = eng.aimed || null;
@@ -503,6 +510,42 @@ el("joinbtn").addEventListener("click", () => {
   const show = q.hidden;
   q.hidden = !show;
   q.dataset.user = show ? "open" : "";
+});
+
+// ── MIDI drop (replaces the song, live) ──────────────────────────────────────
+// Same path the editor uses: base64 the file, send SONG_LOAD; the server parses
+// the MIDI, rebuilds the song, and the roster/lanes/room repopulate on their own.
+function abToBase64(ab) {
+  const bytes = new Uint8Array(ab); let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+const drop = el("drop"), dropTxt = drop.querySelector(".dt");
+const dropIdle = () => { dropTxt.textContent = "Drop a MIDI here"; drop.classList.remove("busy", "err"); };
+async function uploadMidi(file) {
+  if (!file) return;
+  if (!/\.midi?$/i.test(file.name)) { drop.classList.add("err"); dropTxt.textContent = "not a .mid file"; setTimeout(dropIdle, 1800); return; }
+  drop.classList.remove("err"); drop.classList.add("busy");
+  dropTxt.textContent = `reading ${file.name}…`;
+  try {
+    const ab = await file.arrayBuffer();
+    conn.send({ t: P.SONG_LOAD, name: file.name, data: abToBase64(ab) });
+    dropTxt.textContent = `loading ${file.name}…`;
+    setTimeout(dropIdle, 4000);   // same-name reloads don't change the song id — don't stick busy
+  } catch (err) {
+    console.warn("[console] midi read failed", err);
+    drop.classList.remove("busy"); drop.classList.add("err"); dropTxt.textContent = "couldn't read file";
+    setTimeout(dropIdle, 2200);
+  }
+}
+drop.addEventListener("click", (e) => { e.preventDefault(); el("midifile").click(); });
+el("midifile").addEventListener("change", (e) => { uploadMidi(e.target.files[0]); e.target.value = ""; });
+["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "dragend"].forEach((ev) => drop.addEventListener(ev, () => drop.classList.remove("over")));
+drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); uploadMidi(e.dataTransfer.files[0]); });
+// when the new song's tracks land, the lane sig changes — clear the busy state
+conn.on(P.ERR, (m) => {
+  if (m.code === "bad_midi") { drop.classList.remove("busy"); drop.classList.add("err"); dropTxt.textContent = `⚠ ${m.msg || "bad MIDI"}`; setTimeout(dropIdle, 2600); }
 });
 
 window.addEventListener("resize", () => upsertCards());

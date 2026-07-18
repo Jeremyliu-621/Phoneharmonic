@@ -270,9 +270,17 @@
     <div class="side panel" id="leftcol">
       <div class="ph"><span>Tracks</span><span class="sub" id="barslbl"></span></div>
       <div class="scroll" id="lanes"></div>
-      <div id="leftempty">Built-in loop playing.<br>Drop a MIDI in the
-        <a href="../editor/" target="_blank">editor</a> and every instrument shows up here
-        — and as a phone in the room.</div>
+      <div id="leftempty">Built-in loop playing.<br>Drop a MIDI below and every instrument
+        shows up here — and as a phone in the room. Fine-tune notes in the
+        <a href="../editor/" target="_blank">editor</a>.</div>
+      <div id="dropwrap">
+        <label id="drop" for="midifile">
+          <span class="di">🎵</span>
+          <span class="dt">Drop a MIDI here</span>
+          <span class="ds">or click to choose — replaces the song</span>
+        </label>
+        <input id="midifile" type="file" accept=".mid,.midi,audio/midi" hidden>
+      </div>
     </div>
 
     <!-- CENTER: the playground -->
