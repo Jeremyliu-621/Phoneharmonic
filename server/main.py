@@ -16,6 +16,7 @@ import asyncio
 import base64
 import json
 import logging
+import math
 import os
 import socket
 import ssl
@@ -273,6 +274,40 @@ class App:
             # roster (with piano-roll tracks) for each one on venue wifi.
             if server_time_ms() - self._last_roster_ms > 1000.0:
                 await self._broadcast_roster()
+            return
+
+        if t == P.CV_STATE:
+            if conn.role != "admin":
+                await send_json(conn.ws, {"t": P.ERR, "code": "forbidden",
+                                          "msg": "admin role required for cv.state"})
+                return
+            gesture = msg.get("gesture")
+            mode = msg.get("mode")
+            confidence = msg.get("confidence", 0)
+            valid_confidence = (
+                isinstance(confidence, (int, float))
+                and not isinstance(confidence, bool)
+                and math.isfinite(confidence)
+                and 0 <= confidence <= 1
+            )
+            if (gesture not in (None, *P.CV_GESTURES)
+                    or mode not in P.CV_MODES
+                    or not valid_confidence):
+                await send_json(conn.ws, {"t": P.ERR, "code": "bad_cv_state",
+                                          "msg": "invalid CV gesture, mode, or confidence"})
+                return
+
+            signature = (gesture, mode)
+            previous = conn.extra.get("cv_state_signature")
+            conn.extra["cv_state_signature"] = signature
+            conn.extra["cv_state"] = {
+                "gesture": gesture,
+                "mode": mode,
+                "confidence": float(confidence),
+            }
+            if signature != previous:
+                log.info("cv state client=%s gesture=%s mode=%s confidence=%.0f%%",
+                         conn.client_id[:8], gesture or "NONE", mode, float(confidence) * 100)
             return
 
         if t == P.SECTION_READY:

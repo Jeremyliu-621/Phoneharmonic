@@ -28,6 +28,7 @@ LAUNCHER = REPO / "firmware" / "uno_q" / "stream_probe" / "run_probe.sh"
 sys.path.insert(0, str(SERVER))
 
 from imu_telemetry import ImuTelemetry  # noqa: E402
+from hub import ClientConn  # noqa: E402
 from main import App  # noqa: E402
 from network_address import address_score, format_url_host, websocket_url  # noqa: E402
 
@@ -251,6 +252,52 @@ class NetworkAddressTests(unittest.TestCase):
             self.assertEqual(config["join_url"], f"{base}/section/?s=lol1")
             self.assertEqual(config["cv_url"], f"{base}/cvwand/")
             self.assertEqual(config["lan_ip"], "2605:8d80:440:7d4c::10")
+
+        asyncio.run(exercise())
+
+
+class CvStateTests(unittest.TestCase):
+    class RecordingSocket:
+        def __init__(self) -> None:
+            self.messages: list[str] = []
+
+        async def send(self, payload: str) -> None:
+            self.messages.append(payload)
+
+    def test_valid_cv_state_is_logged_once_per_gesture_or_mode_change(self) -> None:
+        async def exercise() -> None:
+            app = App()
+            ws = self.RecordingSocket()
+            conn = ClientConn("cv-client", "admin", ws, name="cv-gestures")
+            msg = {"t": "cv.state", "gesture": "PALM", "mode": "SELECT", "confidence": 0.91}
+
+            with self.assertLogs("main", level="INFO") as captured:
+                await app._dispatch(conn, msg)
+                await app._dispatch(conn, {**msg, "confidence": 0.95})
+
+            cv_lines = [line for line in captured.output if "cv state" in line]
+            self.assertEqual(len(cv_lines), 1)
+            self.assertIn("gesture=PALM mode=SELECT confidence=91%", cv_lines[0])
+            self.assertEqual(conn.extra["cv_state"]["confidence"], 0.95)
+
+        asyncio.run(exercise())
+
+    def test_invalid_or_non_admin_cv_state_is_rejected(self) -> None:
+        async def exercise() -> None:
+            app = App()
+            bad_ws = self.RecordingSocket()
+            admin = ClientConn("bad-cv", "admin", bad_ws)
+            await app._dispatch(admin, {
+                "t": "cv.state", "gesture": "LOG\nINJECTION", "mode": "AI", "confidence": 1,
+            })
+            self.assertEqual(json.loads(bad_ws.messages[-1])["code"], "bad_cv_state")
+
+            section_ws = self.RecordingSocket()
+            section = ClientConn("section-client", "section", section_ws)
+            await app._dispatch(section, {
+                "t": "cv.state", "gesture": "FIST", "mode": "AI", "confidence": 1,
+            })
+            self.assertEqual(json.loads(section_ws.messages[-1])["code"], "forbidden")
 
         asyncio.run(exercise())
 
