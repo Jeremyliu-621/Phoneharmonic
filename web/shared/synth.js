@@ -105,6 +105,11 @@ export class Synth {
     src.buffer = buf;
     src.connect(this.ctx.destination);
     src.start(0);
+    // Preload every sampled note now (~5MB, local) so no note ever falls back
+    // to an oscillator mid-song while its sample streams in.
+    for (const inst of Object.keys(SAMPLE_MAP)) {
+      for (let m = 36; m <= 96; m += 3) this._sample(inst, m);
+    }
     return this.ctx;
   }
 
@@ -116,8 +121,9 @@ export class Synth {
     const now = this.ctx.currentTime;
     if (when < now - 0.05) return;          // hopelessly late — drop
     const t = Math.max(when, now + 0.001);
-    // Crowd control: the more voices already sounding, the quieter each new one.
-    const crowd = Math.min(1, 20 / (this.scheduled.length + 1));
+    // Crowd control: soften only genuinely extreme stacks (ringing tails are
+    // normal now), and never below ~half volume — the limiter handles the rest.
+    const crowd = Math.max(0.55, Math.min(1, 48 / (this.scheduled.length + 1)));
     const peak = Math.max(0.05, (ev.vel || 0.7) * crowd);
 
     if (ev.art === "drum") {                // percussion voice (GM-mapped by pitch)

@@ -428,11 +428,14 @@ class Conductor:
                                          dur * self.s16_ms, midi_out, max(0.12, vel), art,
                                          inst=part.instrument))
 
-        if not neutral:
+        # Overlay only the melodic candidate lines. Pad-style candidates (their
+        # triads snap to ONE estimated key) clash on real songs that modulate —
+        # calm/energy already express through the arrangement shaping itself.
+        if not neutral and choice in ("contrary_motion", "delayed", "generated", "rhythmic_dense"):
             lead_inst = next((p.instrument for p in self.song.parts if p.is_melody), "violin")
             for (on, dur, midi, vel) in cands[choice]:
                 events.append(self._note(melody_sec, bar_start + on * self.s16_ms,
-                                         dur * self.s16_ms, _clampmidi(midi + shift), vel * 0.7,
+                                         dur * self.s16_ms, _clampmidi(midi + shift), vel * 0.55,
                                          ART.get(choice, "pluck"), inst=lead_inst))
         if self._arc_now[2]:                     # the arc lands: a crash on the downbeat
             events.append(self._note(SECTION_ALL, bar_start, self.s16_ms * 2, 49, 0.95, "drum"))
