@@ -112,6 +112,14 @@ ASSETS: dict[str, tuple] = {
                 "facing forward, full body, symmetrical, plain background", 128, 176, True, None, False),
     "harp":    ("an elegant harpist in a flowing formal gown playing a golden harp, standing facing "
                 "forward, full body head to toe, symmetrical, plain background", 128, 176, True, None, False),
+    "viola":   ("an elegant orchestra violist in a deep burgundy formal tailcoat playing a viola, "
+                "standing facing forward, full body head to toe, symmetrical, plain background", 128, 176, True, None, False),
+    "clarinet": ("an elegant orchestra clarinetist in formal concert attire playing a black clarinet, "
+                 "standing facing forward, full body head to toe, symmetrical, plain background", 128, 176, True, None, False),
+    "bass":    ("an elegant musician in formal concert attire playing an upright double bass, "
+                "standing facing forward, full body head to toe, symmetrical, plain background", 128, 176, True, None, False),
+    "bell":    ("an elegant musician in formal concert attire ringing a golden hand bell, "
+                "standing facing forward, full body head to toe, symmetrical, plain background", 128, 176, True, None, False),
     "synth":   ("an elegant musician in formal concert attire playing an ornate keyboard, standing "
                 "facing forward, full body, symmetrical, plain background", 128, 176, True, None, False),
 

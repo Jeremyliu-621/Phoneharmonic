@@ -43,6 +43,14 @@
       color: var(--ink); background: var(--card); border: 2px solid var(--ink); border-radius: 7px;
       box-shadow: 2px 2px 0 rgba(54,38,25,.18); }
     .tickbtn:active { transform: translate(1px, 1px); box-shadow: none; }
+    /* transport cluster in the header: play / stop / panic + bar position */
+    #xport { display: flex; align-items: center; gap: .35rem; padding: .22rem .4rem;
+      border: 2px solid var(--card-deep); border-radius: 8px; }
+    #top .pbtn { width: 32px; height: 32px; font-size: .92rem; border-radius: 7px;
+      box-shadow: 2px 2px 0 rgba(54,38,25,.18); }
+    #top .pbtn.stop, #top .pbtn.warn { width: 30px; }
+    #top .pbtn:hover { box-shadow: 3px 3px 0 rgba(54,38,25,.18); }
+    #top .pbtn:active { box-shadow: none; }
     .tbtn { cursor: pointer; font: 700 10px var(--px-display); text-transform: uppercase;
       color: #fff; border: 2px solid var(--ink); border-radius: 8px; padding: .5rem .75rem;
       background: var(--purple); box-shadow: var(--shadow); text-decoration: none; white-space: nowrap; }
@@ -130,9 +138,18 @@
     .card .box { position: relative; border-radius: 10px; padding: 5px 5px 4px; background: #453425;
       border: 2px solid var(--ink); box-shadow: var(--shadow);
       transition: transform .1s, box-shadow .15s, border-color .15s; }
-    .card img { display: block; width: 100%; height: 46px; object-fit: contain; border-radius: 5px;
-      padding: 4px; background: color-mix(in srgb, var(--c, #8a6d4f) 30%, #fdf8ee);
-      border: 1px solid rgba(0, 0, 0, .3); }
+    .card img { display: block; width: 100%; height: 64px; object-fit: contain; border-radius: 5px;
+      padding: 3px; background: color-mix(in srgb, var(--c, #8a6d4f) 30%, #fdf8ee);
+      border: 1px solid rgba(0, 0, 0, .3); transform-origin: 50% 92%; }
+    /* the performer plays exactly while their notes sound */
+    @keyframes perform {
+      0%   { transform: rotate(-3deg); }
+      25%  { transform: rotate(0deg) translateY(-2px); }
+      50%  { transform: rotate(3deg); }
+      75%  { transform: rotate(0deg) translateY(-2px); }
+      100% { transform: rotate(-3deg); }
+    }
+    .card.playing img { animation: perform .72s ease-in-out infinite; }
     .card .nm { font: 700 8px var(--px-display); color: #f5ead2; text-transform: uppercase;
       letter-spacing: .04em; margin-top: 4px; }
     .card .mem { display: flex; justify-content: center; gap: 3px; margin-top: 3px; flex-wrap: wrap; }
@@ -193,8 +210,14 @@
       pointer-events: none; border: 2px solid var(--ink); border-radius: 9px;
       background: var(--card); box-shadow: 2px 2px 0 rgba(54,38,25,.2);
       padding: .45rem .55rem .4rem; }
-    #moves .mh { font: 700 8px var(--px-display); letter-spacing: .12em; text-transform: uppercase;
-      color: var(--ink-soft); margin-bottom: .2rem; }
+    #moves summary { pointer-events: auto; cursor: pointer; list-style: none;
+      display: flex; align-items: center; justify-content: space-between;
+      font: 700 8px var(--px-display); letter-spacing: .12em; text-transform: uppercase;
+      color: var(--ink-soft); }
+    #moves summary::-webkit-details-marker { display: none; }
+    #moves summary::after { content: "▸"; font-size: 10px; color: var(--ink-soft); }
+    #moves[open] summary::after { content: "▾"; }
+    #moves[open] summary { margin-bottom: .2rem; }
     #moves .mv { display: flex; gap: .45rem; align-items: flex-start; padding: .3rem 0; }
     #moves .mv + .mv { border-top: 1px solid var(--card-deep); }
     #moves .ic { font-size: 13px; line-height: 1.2; flex: none; }
@@ -203,7 +226,7 @@
     #moves i { display: block; font: 600 10px var(--px-body); font-style: normal;
       color: var(--ink-soft); line-height: 1.3; }
 
-    #status { margin-top: .55rem; display: grid; grid-template-columns: 1fr 1fr; gap: .4rem; }
+    #status { margin-top: .55rem; display: grid; grid-template-columns: 1fr; gap: .4rem; }
     #status .cell { padding: .45rem .3rem; border-radius: 8px; border: 2px solid var(--card-deep);
       background: #fdfaf2; text-align: center; }
     #status .cell .k { font: 700 7px var(--px-display); letter-spacing: .1em; text-transform: uppercase;
@@ -213,8 +236,6 @@
 
     /* ═══ bottom: transport + live roll ═══ */
     #bottom { display: flex; align-items: stretch; gap: 10px; padding: 0 10px 10px; }
-    #transport { display: flex; align-items: center; gap: .55rem; flex: none; padding: 0 .8rem;
-      background: var(--card); border: var(--border); border-radius: 10px; box-shadow: var(--shadow); }
     .pbtn { width: 48px; height: 42px; border-radius: 9px; cursor: pointer; font-size: 1.05rem;
       border: 2px solid var(--ink); color: #fff; background: var(--green); box-shadow: var(--shadow); }
     .pbtn:hover { transform: translate(-1px, -1px); box-shadow: 4px 4px 0 rgba(54,38,25,.18); }
@@ -222,7 +243,8 @@
     .pbtn.stop { background: var(--card); color: var(--ink); width: 42px; }
     .pbtn.warn { background: var(--red); width: 42px; }
     #pos { font: 700 9px var(--px-display); text-transform: uppercase; color: var(--ink-soft);
-      padding: .45rem .55rem; border: 2px solid var(--card-deep); border-radius: 8px; }
+      padding: .2rem .1rem .2rem .45rem; margin-left: .15rem; border-left: 2px solid var(--card-deep);
+      white-space: nowrap; }
     #pos b { color: var(--ink); }
     #rollwrap { position: relative; flex: 1; border-radius: 10px; overflow: hidden;
       border: var(--border); box-shadow: var(--shadow); background: #fdfaf2; }
@@ -242,6 +264,12 @@
     <span class="kv">wand <span class="dot" id="wanddot"></span> <b id="wandvar">—</b></span>
     <span class="sp"></span>
     <span class="kv" id="songkv">song <b id="songname">—</b></span>
+    <div id="xport">
+      <button class="pbtn" id="start" title="start">▶</button>
+      <button class="pbtn stop" id="stop" title="stop">■</button>
+      <button class="pbtn warn" id="panic" title="all notes off">✷</button>
+      <span id="pos">bar <b id="barpos">–</b></span>
+    </div>
     <div id="tempoctl">
       <span class="kv">tempo</span>
       <span class="bpm"><span id="bpmlbl">100</span> BPM</span>
@@ -287,8 +315,8 @@
       </div>
       <div id="roomhint" hidden><b>Drag</b> a phone to where it really sits ·
         <b>tap</b> it to conduct just that instrument</div>
-      <div id="moves">
-        <div class="mh">✨ Moves</div>
+      <details id="moves" open>
+        <summary>✨ Moves</summary>
         <div class="mv"><span class="ic">🤏</span><div><b>Pinch + move</b><i>conduct — shape the music</i></div></div>
         <div class="mv"><span class="ic">🙌</span><div><b>Slow lift (pinched)</b><i>swell — builds to a climax</i></div></div>
         <div class="mv"><span class="ic">🤫</span><div><b>Small, calm moves</b><i>hush — softer and simpler</i></div></div>
@@ -296,7 +324,7 @@
         <div class="mv"><span class="ic">✋</span><div><b>Hold open palm</b><i>play / pause the show</i></div></div>
         <div class="mv"><span class="ic">👋</span><div><b>Palm swipe ←→</b><i>rewind / skip 4 bars</i></div></div>
         <div class="mv"><span class="ic">🎯</span><div><b>Tap a phone card</b><i>solo that instrument</i></div></div>
-      </div>
+      </details>
     </div>
 
     <!-- RIGHT: wand control -->
@@ -315,7 +343,6 @@
 
         <div id="status">
           <div class="cell"><div class="k">sync</div><div class="v" id="spread">—</div></div>
-          <div class="cell"><div class="k">tempo</div><div class="v" id="bpmcell">100</div></div>
         </div>
       </div>
     </div>
@@ -323,12 +350,6 @@
 
   <!-- BOTTOM: transport + live piano roll -->
   <div id="bottom">
-    <div id="transport">
-      <button class="pbtn" id="start" title="start">▶</button>
-      <button class="pbtn stop" id="stop" title="stop">■</button>
-      <button class="pbtn warn" id="panic" title="all notes off">✷</button>
-      <span id="pos">bar <b id="barpos">–</b></span>
-    </div>
     <div id="rollwrap">
       <canvas id="rollcanvas"></canvas>
       <div id="nowplaying">press ▶ to start</div>

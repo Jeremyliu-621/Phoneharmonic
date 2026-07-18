@@ -16,6 +16,7 @@
 import { Conn } from "../shared/ws.js";
 import { Clock } from "../shared/clock.js";
 import { Synth } from "../shared/synth.js";
+import { artistFor } from "../shared/artists.js";
 import * as P from "../shared/protocol.js";
 
 const params = new URLSearchParams(location.search);
@@ -139,7 +140,7 @@ function upsertCards() {
       attachDrag(node, g.key);
     }
     node.style.setProperty("--c", colorOf(g.instrument));
-    node.querySelector("img").src = iconFor(g.instrument);
+    node.querySelector("img").src = artistFor(g.instrument);   // the performer, not an icon
     node.querySelector(".nm").textContent = g.instrument;
     const xn = node.querySelector(".xn");
     xn.hidden = g.members.length < 2;
@@ -253,6 +254,9 @@ function pulse(section) {
     if (!node) return;
     node.classList.add("hit");
     clearTimeout(node._t); node._t = setTimeout(() => node.classList.remove("hit"), 130);
+    // sustained "performing" sway: stays on while notes keep landing
+    node.classList.add("playing");
+    clearTimeout(node._p); node._p = setTimeout(() => node.classList.remove("playing"), 700);
   });
 }
 
@@ -264,7 +268,7 @@ function applyEngine(eng) {
   if (!eng) return;
   const bpm = Math.round(eng.bpm);
   bpmNow = bpm;
-  el("bpmlbl").textContent = bpm; el("bpmcell").textContent = bpm;
+  el("bpmlbl").textContent = bpm;
   el("songname").textContent = eng.song || "—";
   if (eng.song !== curSong) { curSong = eng.song; dropIdle(); }   // new song landed
   if (eng.bars) el("barslbl").textContent = eng.bars + " bars";
@@ -444,7 +448,7 @@ el("stop").addEventListener("click", () => conn.send({ t: P.ADMIN_CMD, cmd: "sto
 el("panic").addEventListener("click", () => conn.send({ t: P.ADMIN_CMD, cmd: "allnotesoff" }));
 function nudgeTempo(d) {
   bpmNow = Math.max(60, Math.min(180, bpmNow + d));
-  el("bpmlbl").textContent = bpmNow; el("bpmcell").textContent = bpmNow;
+  el("bpmlbl").textContent = bpmNow;
   conn.send({ t: P.ADMIN_CMD, cmd: "tempo", args: { bpm: bpmNow } });
 }
 el("tdown").addEventListener("click", () => nudgeTempo(-4));

@@ -8,9 +8,10 @@
   <link rel="icon" href="../assets/pixel/logo_wand.png">
   <link rel="stylesheet" href="../shared/pixel.css">
   <style>
-    /* Phone = one instrument in the cozy-pixel orchestra. The audience sees
-       this screen propped up around the room, so it leads with a big pixel
-       instrument icon + name; diagnostics live in the small HUD below. */
+    /* Phone = one performer in the cozy-pixel orchestra. The audience sees
+       this screen propped up around the room, so it IS the musician: a giant
+       pixel artist who plays exactly while this phone's notes sound.
+       Diagnostics hide in a collapsed footer. */
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
     html, body { height: 100%; font-family: var(--px-body); background: var(--paper); color: var(--ink); overflow: hidden; }
     img { image-rendering: pixelated; user-select: none; -webkit-user-drag: none; }
@@ -26,23 +27,39 @@
       padding: .5rem .8rem; box-shadow: var(--shadow); }
 
     #stage { position: fixed; inset: 0; display: none; flex-direction: column; }
-    #insthead { display: flex; flex-direction: column; align-items: center; gap: .5rem; padding-top: 8vh; }
-    #insthead img { width: clamp(84px, 30vw, 128px); height: auto; padding: 12px;
-      background: var(--card); border: 3px solid var(--ink); border-radius: 14px; box-shadow: var(--shadow); }
-    #instnm { font: 700 clamp(.8rem, 5vw, 1.2rem) var(--px-display); text-transform: uppercase; letter-spacing: .05em; }
-    #pulse { flex: 1; display: flex; align-items: center; justify-content: center;
-      font: 700 clamp(2.2rem, 16vw, 5rem) var(--px-display); transition: background 60ms ease-out; }
-    #hud { padding: .75rem 1rem calc(.75rem + env(safe-area-inset-bottom)); font-size: 13px;
-      background: var(--card); border-top: 3px solid var(--ink);
-      display: grid; grid-template-columns: 1fr 1fr; gap: .3rem 1rem; }
+    #stagearea { flex: 1; min-height: 0; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 2vh; padding: 3vh 1rem 1vh; }
+    #artist { height: min(62vh, 120vw); max-width: 92vw; object-fit: contain;
+      transform-origin: 50% 94%; animation: breathe 3.2s ease-in-out infinite; }
+    #instnm { font: 700 clamp(1rem, 7vw, 1.6rem) var(--px-display); text-transform: uppercase;
+      letter-spacing: .06em; text-shadow: 3px 3px 0 rgba(54,38,25,.14); }
+    /* idle: a slow breath. playing: the artist performs, in tempo-ish sway;
+       each loud note lands a little accent pop on top. */
+    @keyframes breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.015); } }
+    @keyframes perform {
+      0%   { transform: rotate(-3.5deg); }
+      25%  { transform: rotate(0deg) translateY(-1.2vh); }
+      50%  { transform: rotate(3.5deg); }
+      75%  { transform: rotate(0deg) translateY(-1.2vh); }
+      100% { transform: rotate(-3.5deg); }
+    }
+    #artist.playing { animation: perform .72s ease-in-out infinite; }
+    #artist.accent { filter: brightness(1.18); }
+
+    #hud { padding: .5rem 1rem calc(.5rem + env(safe-area-inset-bottom)); font-size: 13px;
+      background: var(--card); border-top: 3px solid var(--ink); }
     #hud .k { font: 700 8px var(--px-display); text-transform: uppercase; letter-spacing: .08em; color: var(--ink-soft); }
-    #hud .full { grid-column: 1 / -1; }
-    #trimrow { display: flex; align-items: center; gap: .5rem; }
+    #hudtop { display: flex; align-items: center; gap: .6rem; }
+    #hudtop #sid { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #nerd summary { cursor: pointer; font: 700 8px var(--px-display); text-transform: uppercase;
+      letter-spacing: .08em; color: var(--ink-soft); padding: .3rem 0; list-style: none; }
+    #nerd .grid { display: grid; grid-template-columns: 1fr 1fr; gap: .3rem 1rem; padding-bottom: .3rem; }
+    #trimrow { display: flex; align-items: center; gap: .5rem; grid-column: 1 / -1; }
     #trimrow input { flex: 1; accent-color: var(--purple); }
     .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
       background: var(--red); border: 1.5px solid var(--ink); }
     .dot.ok { background: var(--green); }
-    #leave { width: 100%; margin-top: .35rem; padding: .6rem; font: 700 10px var(--px-display);
+    #leave { flex: none; padding: .45rem .6rem; font: 700 9px var(--px-display);
       text-transform: uppercase; color: var(--red); background: var(--card);
       border: 2px solid var(--red); border-radius: 8px; cursor: pointer;
       box-shadow: 2px 2px 0 rgba(54,38,25,.18); }
@@ -67,25 +84,31 @@
   </div>
 
   <div id="stage">
-    <div id="insthead">
-      <img id="instico" src="../assets/pixel/icon_synth.png" alt="">
+    <div id="stagearea">
+      <img id="artist" src="../assets/synth.png" alt="">
       <div id="instnm">—</div>
     </div>
-    <div id="pulse">—</div>
     <div id="hud">
-      <div class="full"><span class="dot" id="dot"></span> <span id="sid">connecting…</span></div>
-      <div><span class="k">audio</span> <span id="audio">—</span></div>
-      <div><span class="k">θ offset</span> <span id="theta">—</span></div>
-      <div><span class="k">recv</span> <span id="recv">0</span></div>
-      <div><span class="k">played</span> <span id="clicks">0</span></div>
-      <div><span class="k">rtt</span> <span id="rtt">—</span></div>
-      <div><span class="k">last</span> <span id="last">—</span></div>
-      <div class="full" id="trimrow">
-        <span class="k">trim</span>
-        <input type="range" id="trim" min="-100" max="100" value="0" step="1">
-        <span id="trimval">0ms</span>
+      <div id="hudtop">
+        <span class="dot" id="dot"></span> <span id="sid">connecting…</span>
+        <button id="leave">✕ leave</button>
       </div>
-      <div class="full"><button id="leave">✕ leave the orchestra</button></div>
+      <details id="nerd">
+        <summary>· · ·</summary>
+        <div class="grid">
+          <div><span class="k">audio</span> <span id="audio">—</span></div>
+          <div><span class="k">θ offset</span> <span id="theta">—</span></div>
+          <div><span class="k">recv</span> <span id="recv">0</span></div>
+          <div><span class="k">played</span> <span id="clicks">0</span></div>
+          <div><span class="k">rtt</span> <span id="rtt">—</span></div>
+          <div><span class="k">last</span> <span id="last">—</span></div>
+          <div id="trimrow">
+            <span class="k">trim</span>
+            <input type="range" id="trim" min="-100" max="100" value="0" step="1">
+            <span id="trimval">0ms</span>
+          </div>
+        </div>
+      </details>
     </div>
   </div>
 

@@ -4,6 +4,7 @@
 import { Conn } from "../shared/ws.js";
 import { Clock } from "../shared/clock.js";
 import { Synth } from "../shared/synth.js";
+import { artistFor } from "../shared/artists.js";
 import * as P from "../shared/protocol.js";
 
 const params = new URLSearchParams(location.search);
@@ -12,7 +13,7 @@ const session = params.get("s") || "lol1";
 const el = (id) => document.getElementById(id);
 const joinScreen = el("join");
 const stageScreen = el("stage");
-const pulse = el("pulse");
+const artist = el("artist");
 
 let conn = null;
 let clock = null;
@@ -22,18 +23,22 @@ let noteCount = 0;
 let recvCount = 0;
 let left = false;          // true after the Leave button — stops reconnect + overlays
 
-// big pixel icon + name up top — this is what the audience sees on the phone
-const ICONS = ["drums", "piano", "bass", "violin", "cello", "viola", "flute",
-  "clarinet", "trumpet", "harp", "bell", "synth"];
+// THE performer: a giant pixel musician who plays exactly while this phone's
+// notes sound — this screen is what the audience sees propped up in the room.
 function showInstrument(inst) {
-  el("instico").src = `../assets/pixel/icon_${ICONS.includes(inst) ? inst : "synth"}.png`;
+  artist.src = artistFor(inst);
   el("instnm").textContent = inst || "—";
 }
 
+let playTimer = null;
 function onPlay(ev, peak) {
-  pulse.style.background = peak >= 0.9 ? "#a5d8a0" : "#dccfb0";
-  pulse.textContent = ev.note;
-  setTimeout(() => { pulse.style.background = "transparent"; pulse.textContent = "—"; }, 90);
+  artist.classList.add("playing");                 // sway while notes keep landing
+  clearTimeout(playTimer);
+  playTimer = setTimeout(() => artist.classList.remove("playing"), 700);
+  if (peak >= 0.9) {                               // loud note: a little accent flash
+    artist.classList.add("accent");
+    setTimeout(() => artist.classList.remove("accent"), 130);
+  }
   noteCount++;
   el("clicks").textContent = noteCount;
   el("last").textContent = ev.note;
