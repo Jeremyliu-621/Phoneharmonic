@@ -22,6 +22,7 @@ STAGE_ASSIGN = "stage.assign"   # {section_id, instrument}
 STAGE_RECORD = "stage.record"   # {sha256, bytes, dur_s}  finished room recording -> ledger
 ADMIN_CMD = "admin.cmd"         # {cmd:"start"|"stop"|"clicktest"|"resync"|"allnotesoff"|"tempo"|"force", args?}
 SONG_LOAD = "song.load"         # {name, data}  data = base64 of a .mid file -> replaces the song
+SONG_HUM = "song.hum"           # {frames:[[t_ms, midi_float, rms], ...]}  hummed melody -> new song
 CLOCK_REPORT = "clock.report"   # {theta, rtt}  section's own sync estimate (debug/health readout)
 
 # --- Server -> Client ---

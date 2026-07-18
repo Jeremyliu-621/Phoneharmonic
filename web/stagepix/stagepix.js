@@ -350,6 +350,84 @@ async function stopRecording() {
   el("stagewrap").appendChild(a);
 }
 
+// --- hum-to-melody ------------------------------------------------------------
+// Anyone hums into the laptop mic; the browser tracks pitch (autocorrelation),
+// streams the contour to the server, and the quantized melody becomes the song
+// the whole room plays. The "draw anything and it's alive" moment, for music.
+const humBtn = document.createElement("button");
+humBtn.textContent = "🎤 hum a melody";
+humBtn.style.cssText = "position:absolute;left:12px;bottom:12px;z-index:41;cursor:pointer;" +
+  "color:#e7c583;background:rgba(20,12,8,.88);padding:8px 14px;border:1px solid #a8712a;" +
+  "border-radius:6px;font-size:14px;font-family:inherit";
+el("stagewrap").appendChild(humBtn);
+humBtn.addEventListener("click", humCapture);
+
+function pitchOf(buf, sr) {
+  let rms = 0;
+  for (const v of buf) rms += v * v;
+  rms = Math.sqrt(rms / buf.length);
+  if (rms < 0.01) return [null, rms];
+  const minLag = Math.floor(sr / 800), maxLag = Math.min(buf.length - 1, Math.floor(sr / 80));
+  let best = 0, bestCorr = 0, energy = 0;
+  for (let i = 0; i < buf.length; i++) energy += buf[i] * buf[i];
+  for (let lag = minLag; lag <= maxLag; lag++) {
+    let corr = 0;
+    for (let i = 0; i < buf.length - lag; i++) corr += buf[i] * buf[i + lag];
+    if (corr > bestCorr) { bestCorr = corr; best = lag; }
+  }
+  if (!best || bestCorr / energy < 0.3) return [null, rms];
+  return [69 + 12 * Math.log2(sr / best / 440), rms];
+}
+
+async function humCapture() {
+  if (humBtn.disabled) return;
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch { humBtn.textContent = "🎤 mic blocked"; return; }
+  humBtn.disabled = true;
+  const actx = (synth && synth.ctx) || new (window.AudioContext || window.webkitAudioContext)();
+  const an = actx.createAnalyser();
+  an.fftSize = 2048;
+  actx.createMediaStreamSource(stream).connect(an);
+  const buf = new Float32Array(an.fftSize);
+
+  const cv = document.createElement("canvas");   // live contour trace
+  cv.width = 280; cv.height = 70;
+  cv.style.cssText = "position:absolute;left:12px;bottom:52px;z-index:41;" +
+    "background:rgba(20,12,8,.88);border:1px solid #a8712a;border-radius:6px";
+  el("stagewrap").appendChild(cv);
+  const cc = cv.getContext("2d");
+  cc.strokeStyle = "#e7c583"; cc.lineWidth = 2;
+
+  const frames = [];
+  const t0 = performance.now();
+  let voicedAt = 0, lastVoiced = 0;
+  await new Promise((done) => {
+    (function tick() {
+      const now = performance.now() - t0;
+      an.getFloatTimeDomainData(buf);
+      const [midi, rms] = pitchOf(buf, actx.sampleRate);
+      if (midi && midi > 30 && midi < 96) {
+        frames.push([Math.round(now), +midi.toFixed(2), +rms.toFixed(3)]);
+        lastVoiced = now;
+        if (!voicedAt) voicedAt = now;
+        cc.beginPath();
+        cc.arc((now / 8000) * cv.width, cv.height - ((midi - 30) / 66) * cv.height, 1.6, 0, 7);
+        cc.stroke();
+      }
+      humBtn.textContent = voicedAt ? `● listening ${((8000 - now) / 1000).toFixed(0)}s` : "● hum now…";
+      if (now > 8000 || (voicedAt && now - lastVoiced > 1200)) return done();
+      requestAnimationFrame(tick);
+    })();
+  });
+  stream.getTracks().forEach((tr) => tr.stop());
+  setTimeout(() => cv.remove(), 1500);
+  humBtn.disabled = false;
+  humBtn.textContent = "🎤 hum a melody";
+  if (frames.length >= 12) conn.send({ t: P.SONG_HUM, frames: frames.slice(0, 500) });
+}
+conn.on(P.ERR, (m) => { if (m.code === "bad_hum") humBtn.textContent = `🎤 ${m.msg}`; });
+
 // --- embedded webcam-wand dock ----------------------------------------------
 // The hand-tracking conductor (../cvwand/) runs in an iframe so you can conduct
 // with your hand right on the stage screen. Same origin, so getUserMedia works

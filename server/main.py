@@ -258,7 +258,7 @@ class App:
 
         # Show control: only the stage/editor may drive the show — the join QR
         # is public, so audience phones must not be able to stop or hijack it.
-        if (t in (P.ADMIN_CMD, P.SONG_LOAD, P.STAGE_ASSIGN, P.STAGE_PLACE, P.STAGE_RECORD)
+        if (t in (P.ADMIN_CMD, P.SONG_LOAD, P.SONG_HUM, P.STAGE_ASSIGN, P.STAGE_PLACE, P.STAGE_RECORD)
                 and conn.role not in ("stage", "admin")):
             await send_json(conn.ws, {"t": P.ERR, "code": "forbidden", "msg": "controller role required"})
             return
@@ -306,6 +306,9 @@ class App:
             return
         if t == P.SONG_LOAD:
             await self._load_song(conn, msg.get("name", "uploaded"), msg.get("data", ""))
+            return
+        if t == P.SONG_HUM:                     # a hummed melody becomes the song
+            await self._load_hum(conn, msg.get("frames", []))
             return
 
         log.debug("unhandled message type %r", t)
@@ -459,6 +462,21 @@ class App:
                                 f"Mid-set vibe check: '{st['song']}' at {st['bpm']} BPM, the "
                                 f"{st.get('decision_source')} brain last chose {st.get('last_choice')}, "
                                 f"gesture energy {g.get('energy', 0):.2f}.")
+
+    async def _load_hum(self, conn: ClientConn, frames: list) -> None:
+        from engine.hum import song_from_pitches
+        song = song_from_pitches(frames, self.engine.bpm)
+        if song is None:
+            await send_json(conn.ws, {"t": P.ERR, "code": "bad_hum",
+                                      "msg": "couldn't hear a melody — hum louder and longer"})
+            return
+        self.engine.load_song(song, [])
+        self.showlog.record("song.hum", bars=len(song.bars), key=song.key_root)
+        self.announcer.poke("song.load",
+                            "Someone just HUMMED the next melody into the mic and the whole "
+                            "orchestra picked it up. React to that.")
+        await self._broadcast_roster()
+        log.info("hummed song loaded: %d bars, key=%d", len(song.bars), song.key_root)
 
     async def _assign_instrument(self, section_id: str, instrument: str) -> None:
         section = self.session.sections.get(section_id)
