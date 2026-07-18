@@ -285,18 +285,34 @@ class Conductor:
         self._datalog.decision(bar=idx, song=self.song.name, context=ctx, decision=decision)
         return decision
 
+    def _arr_style(self) -> str:
+        """Map the gesture onto the theory-device vocabulary (the composer
+        actions from the research catalog): twist=ANSWER (echo), big=ENERGIZE
+        (arpeggio), moderate push=GROUND (harmonize), light=EMBELLISH (passing)."""
+        g = self._gesture
+        if g is None:
+            return "harmonize"
+        if g.rotation > 0.5:
+            return "echo"
+        e = 0.6 * g.energy + 0.4 * g.size
+        if e > 0.7:
+            return "arpeggio"
+        if e > 0.4:
+            return "harmonize"
+        return "passing"
+
     def _take_generated(self, idx: int, cands: dict) -> None:
         """Add the bar model's prefetched line (if one landed for this bar) and
         request TWO bars ahead — measured serving latency for a composed bar is
         ~4.6s, so the request needs two bars of playing time (~4.8s at 100 BPM)
         to land. A faster serving host can drop this back to one."""
-        line = self._barmodel.take(idx)
-        if line:
-            cands["generated"] = line
+        taken = self._barmodel.take(idx)
+        if taken:
+            cands["generated"] = taken[0]
+            self._gen_style = taken[1]
         if self._barmodel.configured:
             tgt, prev = self.song.bar(idx + 2), self.song.bar(idx + 1)
-            # On a real song the model's one job is chord theory: harmonize.
-            style = "harmonize" if self.song.parts else style_for(self._gesture)
+            style = self._arr_style() if self.song.parts else style_for(self._gesture)
             self._barmodel.prefetch(idx + 2, build_bar_context(
                 key_root=self.song.key_root, bpm=self.bpm,
                 chord_root=tgt.chord_root, chord_minor=tgt.chord_minor,
@@ -464,10 +480,16 @@ class Conductor:
             chord = self._chords[idx % len(self._chords)]
             pad_vel = PAD_VEL * (0.5 + 0.5 * lift)
             if gen_line and lift > 0.25:
-                for (on, dur, midi, vel) in gen_line[:5]:
+                gstyle = getattr(self, "_gen_style", "harmonize")
+                inst = {"harmonize": "viola", "arpeggio": "harp", "echo": "flute",
+                        "passing": next((p.instrument for p in self.song.parts if p.is_melody),
+                                        "violin")}.get(gstyle, "viola")
+                cap = 5 if gstyle == "harmonize" else 16
+                for (on, dur, midi, vel) in gen_line[:cap]:
+                    art = "sustain" if dur >= 8 else "pluck"
                     events.append(self._note(SECTION_ALL, bar_start + on * self.s16_ms,
-                                             dur * self.s16_ms, midi, min(vel, pad_vel * 1.4),
-                                             "sustain", inst="viola"))
+                                             dur * self.s16_ms, midi,
+                                             min(vel, 0.35 + 0.3 * lift), art, inst=inst))
                 self._pad_until = idx
             elif idx > self._pad_until or self._chords[(idx - 1) % len(self._chords)] != chord:
                 span = chord_span(self._chords, idx % len(self._chords))
