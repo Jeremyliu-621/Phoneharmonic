@@ -15,8 +15,9 @@ MIN_FRAMES = 3  # windows shorter than this are dropped as noise
 
 
 class WandRouter:
-    def __init__(self, engine: MusicEngine) -> None:
+    def __init__(self, engine: MusicEngine, recorder=None) -> None:
         self._engine = engine
+        self._recorder = recorder
         self._grabbing = False
         self._modality: str | None = None
         self._frames: list[list[float]] = []
@@ -53,6 +54,8 @@ class WandRouter:
                 )
                 log.info("gesture window: %s, %d frames, %.0fms",
                          self._modality, len(self._frames), server_ms - self._t_start)
+                if self._recorder:
+                    self._recorder.record(window)
                 self._engine.on_gesture(window)
             self._frames = []
         # Let the engine react to the raw grab edges too (e.g., cut sustains).
