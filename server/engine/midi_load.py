@@ -169,7 +169,7 @@ def load_midi_bytes(data: bytes, name: str = "uploaded") -> tuple[Song, list[dic
             # may ring past the barline (up to 4 bars) like a real sequencer.
             onset16 = round((s - b * bar_ticks) / six * 4) / 4
             if 0 <= onset16 < 16:
-                dur16 = max(0.25, min(64 - onset16, round(d / six * 4) / 4))
+                dur16 = max(0.25, min(32 - onset16, round(d / six * 4) / 4))
                 part_bars[b].append((onset16, dur16, pitch, round(vel / 127, 2)))
         for pb in part_bars:
             pb.sort()

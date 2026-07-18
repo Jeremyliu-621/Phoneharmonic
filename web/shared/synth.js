@@ -24,6 +24,11 @@ const SAMPLE_MAP = {
 };
 const FLATS = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"];
 
+// A seat on the stage per instrument (stereo pan): decongests the mix the way
+// a real ensemble does, instead of everything stacked dead-center.
+const PAN = { piano: 0, violin: 0.35, viola: 0.2, cello: -0.3, flute: 0.45,
+              clarinet: -0.4, trumpet: 0.3, bass: -0.15, harp: -0.35, bell: 0.45 };
+
 // Rough instrument timbres: {oscillator wave, lowpass cutoff Hz}. Enough to make
 // a violin, cello, flute etc. read as distinct without samples.
 const TIMBRES = {
@@ -91,11 +96,11 @@ export class Synth {
     // Ear-safety limiter: dense material (busy MIDIs, transcriptions) can stack
     // dozens of oscillators — the compressor stops that becoming a blare.
     this.limiter = this.ctx.createDynamicsCompressor();
-    this.limiter.threshold.value = -18;
-    this.limiter.knee.value = 18;
-    this.limiter.ratio.value = 10;
-    this.limiter.attack.value = 0.003;
-    this.limiter.release.value = 0.25;
+    this.limiter.threshold.value = -9;      // safety net, not a sound: gentle, peaks only
+    this.limiter.knee.value = 12;
+    this.limiter.ratio.value = 4;
+    this.limiter.attack.value = 0.004;
+    this.limiter.release.value = 0.18;
     this.master.connect(this.fx);
     this.fx.connect(this.limiter);
     this.limiter.connect(this.ctx.destination);
@@ -146,16 +151,25 @@ export class Synth {
       const src = this.ctx.createBufferSource();
       src.buffer = smp.buffer;
       src.detune.value = smp.cents + (this.exprSemis || 0) * 100;
+      // Never outlive the sample: our one-shots run ~2s — holding longer means
+      // dead air or a hard cutoff mid-note. Cap and release gracefully.
+      const holdSec = Math.min(durSec, Math.max(0.1, smp.buffer.duration - 0.35));
       const g = this.ctx.createGain();
       g.gain.setValueAtTime(0.0001, t);
       g.gain.exponentialRampToValueAtTime(peak, t + 0.012);
       // Plucked notes ring naturally past their notated length, like a pedal.
-      const tail = sustain ? 0.1 : 0.4;
-      g.gain.setValueAtTime(peak, t + Math.max(0.012, durSec - 0.05));
-      g.gain.exponentialRampToValueAtTime(0.0001, t + durSec + tail);
-      src.connect(g).connect(this.master);
+      const tail = sustain ? 0.25 : 0.4;
+      g.gain.setValueAtTime(peak, t + Math.max(0.012, holdSec - 0.05));
+      g.gain.exponentialRampToValueAtTime(0.0001, t + holdSec + tail);
+      const pan = this.ctx.createStereoPanner ? this.ctx.createStereoPanner() : null;
+      if (pan) {
+        pan.pan.value = PAN[inst] || 0;
+        src.connect(g).connect(pan).connect(this.master);
+      } else {
+        src.connect(g).connect(this.master);
+      }
       src.start(t);
-      src.stop(t + durSec + tail + 0.05);
+      src.stop(t + holdSec + tail + 0.05);
       this.scheduled.push(src);
       src.onended = () => {
         const i = this.scheduled.indexOf(src);
