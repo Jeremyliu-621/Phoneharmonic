@@ -153,6 +153,7 @@ def main() -> int:
         "WM_HTTP_PORT": str(PORT),
         "WM_DECISION_LOG": "0",
         "WM_SHOWS_DIR": shows_dir,
+        "WM_SESSION_FILE": str(pathlib.Path(shows_dir) / "session.json"),
         "WM_BACKBOARD_URL": f"http://127.0.0.1:{mock.server_address[1]}/api",
         "WM_BACKBOARD_KEY": "test-key",
     })

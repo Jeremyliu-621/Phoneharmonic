@@ -14,6 +14,7 @@ export const WAND_TOUCH = "wand.touch";   // {pad, state} MPR121 pads (hw wand)
 export const WAND_RANGE = "wand.range";   // {mm} ToF distance (hw wand)
 export const STAGE_PLACE = "stage.place";
 export const STAGE_ASSIGN = "stage.assign";
+export const STAGE_RECORD = "stage.record";  // {sha256, bytes, dur_s}
 export const ADMIN_CMD = "admin.cmd";
 export const SONG_LOAD = "song.load";
 export const CLOCK_REPORT = "clock.report";

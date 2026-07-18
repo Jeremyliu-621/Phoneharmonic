@@ -70,6 +70,9 @@ class Announcer:
             "memory": "Auto",
             "stream": False,
         }
+        if config.ANNOUNCER_VOICE:               # spoken drops via Backboard's ElevenLabs bridge
+            body["voice"] = {"tts": {"model_id": "eleven_flash_v2_5",
+                                     "voice_id": config.ANNOUNCER_VOICE}}
         if self._assistant:
             body["assistant_id"] = self._assistant
         if self._thread:
@@ -86,7 +89,7 @@ class Announcer:
         text = _extract_text(resp)
         if text:
             log.info("announce (%s): %s", kind, text)
-            await self._on_line(text)
+            await self._on_line(text, _extract_audio(resp))
 
     def _post(self, body: bytes) -> dict:
         req = urllib.request.Request(
@@ -102,4 +105,15 @@ def _extract_text(resp: dict) -> str | None:
                   resp.get("response"), resp.get("text")):
         if isinstance(probe, str) and probe.strip():
             return probe.strip().strip('"')[:200]
+    return None
+
+
+def _extract_audio(resp: dict) -> str | None:
+    """Base64 TTS audio, if Backboard returned any (shape unverified — probe)."""
+    for probe in (resp.get("audio"), resp.get("audio_b64"),
+                  (resp.get("voice") or {}).get("audio") if isinstance(resp.get("voice"), dict) else None):
+        if isinstance(probe, dict):
+            probe = probe.get("data") or probe.get("base64")
+        if isinstance(probe, str) and len(probe) > 100:
+            return probe
     return None

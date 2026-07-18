@@ -5,11 +5,13 @@
 
 const SEMI = { C: 0, "C#": 1, D: 2, "D#": 3, E: 4, F: 5, "F#": 6, G: 7, "G#": 8, A: 9, "A#": 10, B: 11 };
 
-function noteToFreq(note) {
+function noteToMidi(note) {
   const m = /^([A-G]#?)(-?\d+)$/.exec(note);
-  if (!m) return 440;
-  const midi = (parseInt(m[2], 10) + 1) * 12 + SEMI[m[1]];
-  return 440 * Math.pow(2, (midi - 69) / 12);
+  return m ? (parseInt(m[2], 10) + 1) * 12 + SEMI[m[1]] : 69;
+}
+
+function noteToFreq(note) {
+  return 440 * Math.pow(2, (noteToMidi(note) - 69) / 12);
 }
 
 // Rough instrument timbres: {oscillator wave, lowpass cutoff Hz}. Enough to make
@@ -75,6 +77,15 @@ export class Synth {
     const sustain = ev.art === "sustain";
     const peak = Math.max(0.05, ev.vel || 0.7);
 
+    if (ev.art === "drum") {                // percussion voice (GM-mapped by pitch)
+      this._drum(noteToMidi(ev.note), t, peak);
+      if (this.onPlay) {
+        const delay = ev.at - this.clock.serverNow();
+        setTimeout(() => this.onPlay(ev, peak), Math.max(0, delay));
+      }
+      return;
+    }
+
     const osc = this.ctx.createOscillator();
     const g = this.ctx.createGain();
     osc.type = this.timbre ? this.timbre.wave : (sustain ? "sine" : "triangle");
@@ -106,6 +117,60 @@ export class Synth {
     if (this.onPlay) {
       const delay = ev.at - this.clock.serverNow();
       setTimeout(() => this.onPlay(ev, peak), Math.max(0, delay));
+    }
+  }
+
+  _noise() {
+    if (!this._noiseBuf) {
+      const n = this.ctx.sampleRate;        // 1s of white noise, built once
+      this._noiseBuf = this.ctx.createBuffer(1, n, n);
+      const d = this._noiseBuf.getChannelData(0);
+      for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+    }
+    const src = this.ctx.createBufferSource();
+    src.buffer = this._noiseBuf;
+    return src;
+  }
+
+  // Synthesized kit: kick <= 36, snare 37-40, everything else hat/percussion.
+  _drum(midi, t, vel) {
+    const g = this.ctx.createGain();
+    g.connect(this.master);
+    if (midi <= 36) {                       // kick: pitch-swept sine + thump
+      const osc = this.ctx.createOscillator();
+      osc.frequency.setValueAtTime(150, t);
+      osc.frequency.exponentialRampToValueAtTime(45, t + 0.12);
+      g.gain.setValueAtTime(vel, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+      osc.connect(g);
+      osc.start(t); osc.stop(t + 0.3);
+      this.scheduled.push(osc);
+    } else if (midi <= 40) {                // snare: bandpassed noise + body tone
+      const noise = this._noise();
+      const bp = this.ctx.createBiquadFilter();
+      bp.type = "bandpass"; bp.frequency.value = 1800; bp.Q.value = 0.8;
+      g.gain.setValueAtTime(vel * 0.8, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+      noise.connect(bp).connect(g);
+      noise.start(t); noise.stop(t + 0.2);
+      const body = this.ctx.createOscillator();
+      const bg = this.ctx.createGain();
+      body.type = "triangle"; body.frequency.value = 185;
+      bg.gain.setValueAtTime(vel * 0.4, t);
+      bg.gain.exponentialRampToValueAtTime(0.001, t + 0.1);
+      body.connect(bg).connect(this.master);
+      body.start(t); body.stop(t + 0.12);
+      this.scheduled.push(noise, body);
+    } else {                                // hats / other percussion: bright tick
+      const noise = this._noise();
+      const hp = this.ctx.createBiquadFilter();
+      hp.type = "highpass"; hp.frequency.value = 7000;
+      const open = midi === 46;             // open hat rings a little longer
+      g.gain.setValueAtTime(vel * 0.5, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + (open ? 0.25 : 0.06));
+      noise.connect(hp).connect(g);
+      noise.start(t); noise.stop(t + (open ? 0.3 : 0.08));
+      this.scheduled.push(noise);
     }
   }
 

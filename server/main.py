@@ -18,6 +18,7 @@ import json
 import logging
 import socket
 import ssl
+import time
 import uuid
 
 import websockets
@@ -29,9 +30,11 @@ from clocksync import server_time_ms
 from config import (
     CERT_DIR,
     DEFAULT_SESSION,
+    DISCONNECT_GRACE_S,
     HTTP_PORT,
     HTTPS_PORT,
     PROTOCOL_VERSION,
+    SESSION_FILE,
     WS_PATH,
 )
 from engine.candidates import GENERATORS
@@ -65,6 +68,7 @@ class App:
     def __init__(self) -> None:
         self.hub = Hub()
         self.session = SessionState(name=DEFAULT_SESSION)
+        self._load_session()
         self.engine = Conductor()
         self.wand = WandRouter(self.engine)
         self.scheduler = Scheduler(self.engine, self.hub)
@@ -79,6 +83,38 @@ class App:
         self._tension = 0.0
         self._last_tension_ms = 0.0
         self._vibe_task: asyncio.Task | None = None
+
+    # --- session persistence + roster hygiene ---
+    def _load_session(self) -> None:
+        try:
+            if SESSION_FILE.exists():
+                self.session.restore(json.loads(SESSION_FILE.read_text(encoding="utf-8")))
+                log.info("restored %d section slots from %s", len(self.session.sections), SESSION_FILE)
+        except (OSError, ValueError, KeyError) as e:
+            log.warning("session restore failed (%s) — starting fresh", e)
+
+    def _save_session(self) -> None:
+        try:
+            SESSION_FILE.write_text(json.dumps(self.session.to_dict(), indent=2), encoding="utf-8")
+        except OSError as e:
+            log.warning("session save failed: %s", e)
+
+    async def prune_loop(self) -> None:
+        """Drop section slots that have been disconnected past the grace period,
+        so private-mode phones minting fresh ids don't clutter the roster forever."""
+        while True:
+            await asyncio.sleep(30.0)
+            now = time.time()
+            stale = [sid for sid, s in self.session.sections.items()
+                     if not s.connected and s.dropped_at and now - s.dropped_at > DISCONNECT_GRACE_S]
+            if not stale:
+                continue
+            for sid in stale:
+                del self.session.sections[sid]
+            log.info("pruned %d stale section slot(s): %s", len(stale), stale)
+            self._save_session()
+            self.engine.on_sections_changed(self.session.engine_sections())
+            await self._broadcast_roster()
 
     # --- static + WS routing ---
     def process_request(self, connection: ServerConnection, request):
@@ -161,11 +197,13 @@ class App:
         for s in self.session.sections.values():
             if s.client_id == conn.client_id:
                 s.connected = True
+                s.dropped_at = None
                 log.info("section %s rejoined as %s", s.section_id, conn.client_id[:8])
                 return s
         sid = self.session.new_section_id()
         section = Section(section_id=sid, client_id=conn.client_id)
         self.session.sections[sid] = section
+        self._save_session()
         log.info("section %s created for %s", sid, conn.client_id[:8])
         return section
 
@@ -220,7 +258,8 @@ class App:
 
         # Show control: only the stage/editor may drive the show — the join QR
         # is public, so audience phones must not be able to stop or hijack it.
-        if t in (P.ADMIN_CMD, P.SONG_LOAD, P.STAGE_ASSIGN, P.STAGE_PLACE) and conn.role not in ("stage", "admin"):
+        if (t in (P.ADMIN_CMD, P.SONG_LOAD, P.STAGE_ASSIGN, P.STAGE_PLACE, P.STAGE_RECORD)
+                and conn.role not in ("stage", "admin")):
             await send_json(conn.ws, {"t": P.ERR, "code": "forbidden", "msg": "controller role required"})
             return
 
@@ -258,6 +297,12 @@ class App:
             return
         if t == P.STAGE_PLACE:
             await self._place_section(msg.get("section_id"), msg.get("azimuth_deg"))
+            return
+        if t == P.STAGE_RECORD:                 # finished room recording -> ledger
+            self.showlog.record("recording", sha256=str(msg.get("sha256", ""))[:64],
+                                bytes=int(msg.get("bytes", 0)), dur_s=round(float(msg.get("dur_s", 0)), 1))
+            self.showlog.write_manifest()       # refresh so the mint includes the audio hash
+            log.info("recording logged: %s (%d bytes)", str(msg.get("sha256", ""))[:16], msg.get("bytes", 0))
             return
         if t == P.SONG_LOAD:
             await self._load_song(conn, msg.get("name", "uploaded"), msg.get("data", ""))
@@ -391,11 +436,16 @@ class App:
             section.azimuth_deg = float(azimuth_deg)
         except (TypeError, ValueError):
             return
+        self._save_session()
         self.engine.on_sections_changed(self.session.engine_sections())
         await self._broadcast_roster()
 
-    async def _announce_line(self, text: str) -> None:
-        await self.hub.broadcast({"t": P.ANNOUNCE, "text": text}, roles=("stage", "admin"))
+    async def _announce_line(self, text: str, audio_b64: str | None = None) -> None:
+        payload = {"t": P.ANNOUNCE, "text": text}
+        if audio_b64:
+            payload["audio_b64"] = audio_b64
+            payload["mime"] = "audio/mpeg"
+        await self.hub.broadcast(payload, roles=("stage", "admin"))
 
     async def _vibe_loop(self) -> None:
         """While the show runs, periodically hand the commentator a vibe digest."""
@@ -415,6 +465,7 @@ class App:
         if not section or not instrument:
             return
         section.instrument = instrument
+        self._save_session()
         conn = self.hub.get(section.client_id)
         if conn:
             await send_json(conn.ws, {"t": P.SECTION_CONFIG, "section_id": section_id,
@@ -436,6 +487,7 @@ class App:
             was_ready = section.ready
             section.connected = False
             section.ready = False
+            section.dropped_at = time.time()
             self.engine.on_sections_changed(self.session.engine_sections())
             if was_ready:
                 self.showlog.record("section.drop", section=conn.section_id)
@@ -480,6 +532,7 @@ async def main() -> None:
     log.info("LAN IP detected: %s", app.lan_ip)
     log.info("stage/admin:  http://%s:%d/stage/?admin=1", app.lan_ip, HTTP_PORT)
     log.info("section join: http://%s:%d/section/?s=%s", app.lan_ip, HTTP_PORT, DEFAULT_SESSION)
+    asyncio.create_task(app.prune_loop())
 
     # host=None binds all interfaces (IPv4 + IPv6), so both localhost (::1 on
     # Windows) and the LAN IPv4 reach the server.

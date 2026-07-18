@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import itertools
 import logging
+import math
 
 from config import MIN_LEAD_MS
 from engine.candidates import ART, GENERATORS, generate
 from engine.song import builtin_song
-from engine.theory import midi_to_name
+from engine.theory import midi_to_name, voice_triad
 from engine_api import CancelSpec, GestureWindow, NoteEvent, SectionInfo
 from gestures.features import GestureFeatures, extract_features
 from ml import heuristic
@@ -39,6 +40,7 @@ class Conductor:
         self._last_choice: str | None = None
         self._forced: str | None = None                 # editor override; None = let the ranker choose
         self._aim: str | None = None                    # wand-aimed section (spatial mode)
+        self._pickup: list | None = None                # instant gesture answer, pending emission
         self._model = RemoteModel()                     # trained policy (WM_MODEL_URL); optional
         self._barmodel = RemoteBarModel()               # trained line writer (WM_BARMODEL_URL)
         self._decision: Decision | None = None          # the policy's active answer, until the next gesture
@@ -82,6 +84,7 @@ class Conductor:
             "last_choice": self._last_choice,
             "decision_source": self._last_source,
             "candidates": list(GENERATORS) + (["generated"] if self._barmodel.configured else []),
+            "training_rows": self._datalog.rows,
             "gesture": self._gesture.as_dict() if self._gesture else None,
             "song": self.song.name,
             "key_root": self.song.key_root,
@@ -113,9 +116,24 @@ class Conductor:
         log.info("gesture -> %s", {k: round(v, 2) for k, v in self._gesture.as_dict().items()})
         self._decision = None                    # new intent — the model must re-decide
         self._model.request(self._context())
+        self._queue_pickup(window.t_end_server_ms)
 
     def on_grab(self, kind: str, server_ms: float) -> None:
         pass  # grab edges could cut sustains; not needed for the slice
+
+    def _queue_pickup(self, t_end_ms: float) -> None:
+        """The room answers a gesture on the next 8th-note — a quick low-velocity
+        chord flourish — so conducting feels instant while the full musical
+        response still lands at the bar line."""
+        if not self._playing:
+            return
+        eighth = self.bar_ms / 8
+        bar_start = self._next_bar_start - self.bar_ms
+        k = math.ceil((t_end_ms + 60.0 - bar_start) / eighth)
+        chord = self.song.bar(max(0, self._next_bar_idx - 1)).chord_pcs
+        vel = round(0.25 + 0.5 * (self._gesture.energy if self._gesture else 0.3), 3)
+        self._pickup = [(bar_start + k * eighth + i * eighth / 4, eighth / 4, m, vel)
+                        for i, m in enumerate(voice_triad(chord, base=64))]
 
     def on_aim(self, section_id: str | None) -> None:
         self._aim = section_id
@@ -134,6 +152,11 @@ class Conductor:
             self._next_bar_idx = 0
             self._reanchor = False
         events: list[NoteEvent] = []
+        if self._pickup:                         # instant gesture answer, once
+            for (at, dur, midi, vel) in self._pickup:
+                if at >= now_ms + MIN_LEAD_MS:
+                    events.append(self._note(SECTION_ALL, at, dur, midi, vel, "pluck"))
+            self._pickup = None
         while self._next_bar_start <= until_ms:
             if self._next_bar_start >= now_ms - self.bar_ms:
                 events.extend(self._bar_events(self._next_bar_idx, self._next_bar_start))
@@ -240,17 +263,17 @@ class Conductor:
     def _arrangement_events(self, idx: int, bar_start: float) -> list[NoteEvent]:
         """Play a loaded MIDI's parts distributed across sections (round-robin;
         laptop plays all via SECTION_ALL if no phones), plus the gesture layer
-        riding on the lead. Drums are skipped until we have a percussion voice."""
+        riding on the lead. Drum parts play through the synth's percussion
+        voice (art="drum") — a phone can be the kit."""
         events: list[NoteEvent] = []
         n = len(self._sections)
         melody_sec = SECTION_ALL
-        playable = [p for p in self.song.parts if not p.is_drum]   # no percussion voice yet
-        for i, part in enumerate(playable):
+        for i, part in enumerate(self.song.parts):
             sec = SECTION_ALL if n == 0 else self._sections[i % n].section_id
             if part.is_melody:
                 melody_sec = sec
             for (on, dur, midi, vel) in part.bars[idx % len(part.bars)]:
-                art = "sustain" if dur >= 8 else "pluck"
+                art = "drum" if part.is_drum else ("sustain" if dur >= 8 else "pluck")
                 events.append(self._note(sec, bar_start + on * self.s16_ms,
                                          dur * self.s16_ms, _clampmidi(midi), max(0.12, vel), art))
 
@@ -264,7 +287,8 @@ class Conductor:
             events.append(self._note(melody_sec, bar_start + on * self.s16_ms,
                                      dur * self.s16_ms, _clampmidi(midi + shift), vel * 0.7,
                                      ART.get(choice, "pluck")))
-        log.info("bar %d arrangement: %d parts -> %d sections, overlay=%s", idx, len(playable), n, choice)
+        log.info("bar %d arrangement: %d parts -> %d sections, overlay=%s",
+                 idx, len(self.song.parts), n, choice)
         return events
 
     def _note(self, section: str, at: float, dur: float, midi: int, vel: float, art: str) -> NoteEvent:

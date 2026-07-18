@@ -24,6 +24,11 @@ class DecisionLog:
         self._opened = False
         self._n = 0
 
+    @property
+    def rows(self) -> int:
+        """Training rows logged this run (surfaced in the editor)."""
+        return self._n
+
     def decision(self, *, bar: int, song: str, context: dict, decision: Decision) -> None:
         self._n += 1
         self._write({"id": self._n, "ts": round(time.time(), 3), "bar": bar, "song": song,

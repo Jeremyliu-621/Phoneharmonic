@@ -19,6 +19,7 @@ WAND_TOUCH = "wand.touch"       # {pad:0-11, state:"down"|"up"}  MPR121 pads: 0-
 WAND_RANGE = "wand.range"       # {mm}        ToF distance -> proximity tension (fx.tension)
 STAGE_PLACE = "stage.place"     # {section_id, azimuth_deg, pos:[x,y,z]}
 STAGE_ASSIGN = "stage.assign"   # {section_id, instrument}
+STAGE_RECORD = "stage.record"   # {sha256, bytes, dur_s}  finished room recording -> ledger
 ADMIN_CMD = "admin.cmd"         # {cmd:"start"|"stop"|"clicktest"|"resync"|"allnotesoff"|"tempo"|"force", args?}
 SONG_LOAD = "song.load"         # {name, data}  data = base64 of a .mid file -> replaces the song
 CLOCK_REPORT = "clock.report"   # {theta, rtt}  section's own sync estimate (debug/health readout)

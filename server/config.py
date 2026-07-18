@@ -44,6 +44,11 @@ BACKBOARD_KEY = os.environ.get("WM_BACKBOARD_KEY", "")
 BACKBOARD_ASSISTANT = os.environ.get("WM_BACKBOARD_ASSISTANT", "")  # reuse one assistant = set-to-set memory
 BACKBOARD_PROVIDER = os.environ.get("WM_BACKBOARD_PROVIDER", "openai")
 BACKBOARD_MODEL = os.environ.get("WM_BACKBOARD_MODEL", "gpt-4o")
+# ElevenLabs voice id: set to have Backboard speak announcements (voice.tts).
+ANNOUNCER_VOICE = os.environ.get("WM_ANNOUNCER_VOICE", "")
+
+# --- Session persistence (instruments/placement survive a server restart) ---
+SESSION_FILE = pathlib.Path(os.environ.get("WM_SESSION_FILE", str(SERVER_DIR / "session.json")))
 
 # --- Decision model (optional; unset = heuristic ranker only) ---
 # Any OpenAI-compatible serving base works, e.g. a Freesolo deploy:

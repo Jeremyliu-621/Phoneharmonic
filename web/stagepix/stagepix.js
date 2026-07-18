@@ -238,7 +238,13 @@ conn.on(P.SCHED_NOTES, (m) => {
   }
 });
 conn.on(P.SCHED_CANCEL, (m) => { if (m.allnotesoff) synth.panic(); });
-conn.on(P.FX_TENSION, (m) => synth.setTension(m.value));
+conn.on(P.FX_TENSION, (m) => {
+  synth.setTension(m.value);
+  // Make the build-up visible too: footlights fade and the room desaturates.
+  const v = Math.max(0, Math.min(1, m.value || 0));
+  el("footlights").style.opacity = String(1 - 0.7 * v);
+  el("stagewrap").style.filter = v > 0.02 ? `saturate(${1 - 0.45 * v}) brightness(${1 - 0.25 * v})` : "";
+});
 
 // Wand aim: glow the performer the conductor is pointing at.
 conn.on(P.WAND_STATE, (m) => {
@@ -281,6 +287,7 @@ el("splash").addEventListener("click", async () => {
   clock.start();
   started = true;
   sendStart();
+  startRecording();
 });
 // A fast splash click can beat the ws handshake; retry until we're welcomed
 // (Conn.send silently drops frames on a socket that isn't open yet).
@@ -288,8 +295,8 @@ function sendStart() {
   if (conn.welcome) conn.send({ t: P.ADMIN_CMD, cmd: "start" });
   else setTimeout(sendStart, 150);
 }
-el("start2").addEventListener("click", () => conn.send({ t: P.ADMIN_CMD, cmd: "start" }));
-el("stop").addEventListener("click", () => conn.send({ t: P.ADMIN_CMD, cmd: "stop" }));
+el("start2").addEventListener("click", () => { conn.send({ t: P.ADMIN_CMD, cmd: "start" }); startRecording(); });
+el("stop").addEventListener("click", () => { conn.send({ t: P.ADMIN_CMD, cmd: "stop" }); stopRecording(); });
 el("panic").addEventListener("click", () => conn.send({ t: P.ADMIN_CMD, cmd: "allnotesoff" }));
 el("introbtn").addEventListener("click", (e) => {
   e.preventDefault();
@@ -297,6 +304,51 @@ el("introbtn").addEventListener("click", (e) => {
   setTimeout(revealStage, 450);                // replay the curtain-raise
 });
 setInterval(() => burstSparkles(1), 1500);     // gentle ambient shimmer
+
+// --- set recording ------------------------------------------------------------
+// Capture the room (mic, if allowed) mixed with the stage synth. On stop: hash
+// the audio, report it to the show ledger (stage.record -> minted metadata),
+// and offer a download link over the stage.
+let recorder = null, recChunks = [], recStart = 0;
+
+async function startRecording() {
+  if (recorder || !synth.ctx) return;
+  try {
+    const dest = synth.ctx.createMediaStreamDestination();
+    synth.fx.connect(dest);
+    try {
+      const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+      synth.ctx.createMediaStreamSource(mic).connect(dest);   // the actual room
+    } catch { /* mic denied — synth-only recording still counts */ }
+    recChunks = [];
+    recorder = new MediaRecorder(dest.stream);
+    recorder.ondataavailable = (e) => { if (e.data.size) recChunks.push(e.data); };
+    recorder.start(1000);
+    recStart = performance.now();
+    console.log("[stagepix] set recording started");
+  } catch (e) { console.warn("[stagepix] recording unavailable", e); recorder = null; }
+}
+
+async function stopRecording() {
+  if (!recorder) return;
+  const rec = recorder;
+  recorder = null;
+  await new Promise((res) => { rec.onstop = res; rec.stop(); });
+  const blob = new Blob(recChunks, { type: rec.mimeType || "audio/webm" });
+  if (!blob.size) return;
+  const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", await blob.arrayBuffer()))]
+    .map((b) => b.toString(16).padStart(2, "0")).join("");
+  conn.send({ t: P.STAGE_RECORD, sha256: hash, bytes: blob.size,
+              dur_s: (performance.now() - recStart) / 1000 });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `wandmaestro-set-${Date.now()}.webm`;
+  a.textContent = `⬇ set recording · ${(blob.size / 1e6).toFixed(1)}MB · ${hash.slice(0, 8)}…`;
+  a.style.cssText = "position:absolute;left:50%;bottom:6%;transform:translateX(-50%);z-index:40;" +
+    "color:#e7c583;background:rgba(20,12,8,.88);padding:6px 14px;border:1px solid #a8712a;" +
+    "border-radius:6px;font-size:14px;text-decoration:none";
+  el("stagewrap").appendChild(a);
+}
 
 // --- embedded webcam-wand dock ----------------------------------------------
 // The hand-tracking conductor (../cvwand/) runs in an iframe so you can conduct

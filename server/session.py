@@ -18,6 +18,7 @@ class Section:
     azimuth_deg: float = 0.0
     connected: bool = True
     ready: bool = False
+    dropped_at: float | None = None   # epoch s of disconnect (grace-period pruning)
 
 
 @dataclass
@@ -39,6 +40,25 @@ class SessionState:
         sid = f"s{self._next_section_num}"
         self._next_section_num += 1
         return sid
+
+    # --- persistence: instruments/placement survive a server restart ---
+    def to_dict(self) -> dict:
+        return {"next": self._next_section_num,
+                "sections": [{"section_id": s.section_id, "client_id": s.client_id,
+                              "instrument": s.instrument, "azimuth_deg": s.azimuth_deg}
+                             for s in self.sections.values()]}
+
+    def restore(self, data: dict) -> None:
+        """Rebuild the roster from a saved snapshot: every slot starts dropped;
+        a phone rejoining with its stored client_id rebinds its old seat."""
+        import time
+        self._next_section_num = int(data.get("next", 1))
+        for row in data.get("sections", []):
+            s = Section(section_id=row["section_id"], client_id=row["client_id"],
+                        instrument=row.get("instrument", "synth"),
+                        azimuth_deg=float(row.get("azimuth_deg", 0.0)),
+                        connected=False, ready=False, dropped_at=time.time())
+            self.sections[s.section_id] = s
 
     def engine_sections(self) -> list[SectionInfo]:
         return [

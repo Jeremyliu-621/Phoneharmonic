@@ -12,7 +12,7 @@ const params = new URLSearchParams(location.search);
 const session = params.get("s") || "lol1";
 const el = (id) => document.getElementById(id);
 
-const INSTRUMENTS = ["violin", "viola", "cello", "flute", "clarinet", "piano", "bass", "synth", "bell"];
+const INSTRUMENTS = ["violin", "viola", "cello", "flute", "clarinet", "piano", "bass", "synth", "bell", "drums"];
 const NICE = {
   auto: "Auto", lower_imitation: "Lower imitation", contrary_motion: "Contrary motion",
   sustained: "Sustained chord", delayed: "Delayed echo", rhythmic_dense: "Rhythmic (busy)", rest: "Rest (silence)",
@@ -123,7 +123,10 @@ conn.on(P.ROSTER, (m) => {
   const eng = m.engine || {};
   if (eng.candidates) renderCandidates(eng.candidates);
   renderSong(eng);
-  el("nowplaying").textContent = eng.last_choice ? (NICE[eng.last_choice] || eng.last_choice) : "—";
+  const brain = eng.decision_source ? ` · ${eng.decision_source} brain` : "";
+  const rows = eng.training_rows ? ` · ${eng.training_rows} rows logged` : "";
+  el("nowplaying").textContent =
+    (eng.last_choice ? (NICE[eng.last_choice] || eng.last_choice) : "—") + brain + rows;
   if (eng.bpm && !tempoDragging) { el("tempo").value = eng.bpm; el("tempoval").textContent = eng.bpm + " BPM"; }
 
   const w = m.wand || {};
