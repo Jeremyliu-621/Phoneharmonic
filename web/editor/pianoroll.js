@@ -416,7 +416,7 @@ export class PianoRoll {
     const W = this.main.clientWidth, H = this.main.clientHeight;
     const rollBot = H - VEL_H;
     ctx.clearRect(0, 0, W, H);
-    ctx.fillStyle = "#0d0507"; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = "#faf4e6"; ctx.fillRect(0, 0, W, H);
 
     // --- roll body (clipped) ---
     ctx.save();
@@ -427,9 +427,9 @@ export class PianoRoll {
     for (let p = pTop; this._yOf(p) < rollBot; p--) {
       if (p < PITCH_LO) break;
       const y = this._yOf(p);
-      ctx.fillStyle = BLACK.has(((p % 12) + 12) % 12) ? "#140a0d" : "#1b0f12";
+      ctx.fillStyle = BLACK.has(((p % 12) + 12) % 12) ? "#eadfc6" : "#f6efdd";
       ctx.fillRect(GUTTER_W, y, W - GUTTER_W, this.rowH);
-      if (p % 12 === 0) { ctx.strokeStyle = "rgba(231,197,131,.16)"; ctx.beginPath(); ctx.moveTo(GUTTER_W, Math.round(y) + 0.5); ctx.lineTo(W, Math.round(y) + 0.5); ctx.stroke(); }
+      if (p % 12 === 0) { ctx.strokeStyle = "rgba(54,38,25,.18)"; ctx.beginPath(); ctx.moveTo(GUTTER_W, Math.round(y) + 0.5); ctx.lineTo(W, Math.round(y) + 0.5); ctx.stroke(); }
     }
 
     // vertical grid: 16th, beat, bar
@@ -438,12 +438,12 @@ export class PianoRoll {
       const x = this._xOf(tick); if (x > W) break; if (x < GUTTER_W) continue;
       const isBar = tick % 16 === 0, isBeat = tick % 4 === 0;
       if (!isBeat && this.pxPer16 < 12) continue;   // hide 16th lines when zoomed out
-      ctx.strokeStyle = isBar ? "rgba(231,197,131,.34)" : isBeat ? "rgba(231,197,131,.16)" : "rgba(231,197,131,.06)";
+      ctx.strokeStyle = isBar ? "rgba(54,38,25,.35)" : isBeat ? "rgba(54,38,25,.16)" : "rgba(54,38,25,.07)";
       ctx.beginPath(); ctx.moveTo(Math.round(x) + 0.5, RULER_H); ctx.lineTo(Math.round(x) + 0.5, rollBot); ctx.stroke();
     }
     // loop-end marker
     const lx = this._xOf(this._nBars() * 16);
-    if (lx > GUTTER_W && lx < W) { ctx.strokeStyle = "rgba(255,120,90,.55)"; ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.moveTo(lx, RULER_H); ctx.lineTo(lx, rollBot); ctx.stroke(); ctx.setLineDash([]); }
+    if (lx > GUTTER_W && lx < W) { ctx.strokeStyle = "rgba(217,83,74,.6)"; ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.moveTo(lx, RULER_H); ctx.lineTo(lx, rollBot); ctx.stroke(); ctx.setLineDash([]); }
 
     // notes: ghost inactive tracks first, then the active track
     for (const t of this.tracks) if (t.id !== this.activeId) this._drawNotes(ctx, t, 0.26, rollBot);
@@ -457,7 +457,7 @@ export class PianoRoll {
 
   _drawNotes(ctx, t, alpha, rollBot) {
     const minTick = this.scrollX / this.pxPer16 - 8, maxTick = (this.scrollX + this._rollW()) / this.pxPer16 + 1;
-    const col = t.color || "#e7c583";
+    const col = t.color || "#8a6d4f";
     for (const n of t.notes) {
       if (n.start + n.dur < minTick || n.start > maxTick) continue;   // cull
       const x = this._xOf(n.start), y = this._yOf(n.pitch), w = Math.max(2, n.dur * this.pxPer16 - 1), h = this.rowH - 1;
@@ -467,50 +467,50 @@ export class PianoRoll {
       ctx.fillStyle = col;
       this._roundRect(ctx, x, y, w, h, 2); ctx.fill();
       ctx.globalAlpha = alpha;
-      if (selected) { ctx.strokeStyle = "#ffe3a3"; ctx.lineWidth = 1.5; this._roundRect(ctx, x + 0.5, y + 0.5, w - 1, h - 1, 2); ctx.stroke(); }
-      else { ctx.strokeStyle = "rgba(0,0,0,.5)"; ctx.lineWidth = 1; ctx.strokeRect(Math.round(x) + 0.5, Math.round(y) + 0.5, w, h); }
+      if (selected) { ctx.strokeStyle = "#362619"; ctx.lineWidth = 2; this._roundRect(ctx, x + 0.5, y + 0.5, w - 1, h - 1, 2); ctx.stroke(); }
+      else { ctx.strokeStyle = "rgba(54,38,25,.55)"; ctx.lineWidth = 1; ctx.strokeRect(Math.round(x) + 0.5, Math.round(y) + 0.5, w, h); }
     }
     ctx.globalAlpha = 1;
   }
 
   _drawRuler(ctx, W, len) {
-    ctx.fillStyle = "#170c10"; ctx.fillRect(GUTTER_W, 0, W - GUTTER_W, RULER_H);
-    ctx.fillStyle = "#b9903f"; ctx.font = "600 11px ui-monospace, monospace"; ctx.textBaseline = "middle";
+    ctx.fillStyle = "#e7dcc4"; ctx.fillRect(GUTTER_W, 0, W - GUTTER_W, RULER_H);
+    ctx.fillStyle = "#7a6650"; ctx.font = "600 11px ui-monospace, monospace"; ctx.textBaseline = "middle";
     for (let bar = Math.floor(this.scrollX / this.pxPer16 / 16); bar * 16 <= len; bar++) {
       const x = this._xOf(bar * 16); if (x > W) break; if (x < GUTTER_W - 20) continue;
-      ctx.strokeStyle = "rgba(231,197,131,.4)"; ctx.beginPath(); ctx.moveTo(Math.round(x) + 0.5, RULER_H - 8); ctx.lineTo(Math.round(x) + 0.5, RULER_H); ctx.stroke();
+      ctx.strokeStyle = "rgba(54,38,25,.45)"; ctx.beginPath(); ctx.moveTo(Math.round(x) + 0.5, RULER_H - 8); ctx.lineTo(Math.round(x) + 0.5, RULER_H); ctx.stroke();
       if (x >= GUTTER_W) ctx.fillText(String(bar + 1), x + 4, RULER_H / 2);
     }
-    ctx.strokeStyle = "rgba(231,197,131,.25)"; ctx.beginPath(); ctx.moveTo(GUTTER_W, RULER_H + 0.5); ctx.lineTo(W, RULER_H + 0.5); ctx.stroke();
+    ctx.strokeStyle = "rgba(54,38,25,.3)"; ctx.beginPath(); ctx.moveTo(GUTTER_W, RULER_H + 0.5); ctx.lineTo(W, RULER_H + 0.5); ctx.stroke();
   }
 
   _drawKeys(ctx, rollBot) {
-    ctx.fillStyle = "#0c0608"; ctx.fillRect(0, RULER_H, GUTTER_W, rollBot - RULER_H);
+    ctx.fillStyle = "#e7dcc4"; ctx.fillRect(0, RULER_H, GUTTER_W, rollBot - RULER_H);
     ctx.save(); ctx.beginPath(); ctx.rect(0, RULER_H, GUTTER_W, rollBot - RULER_H); ctx.clip();
     const pTop = PITCH_HI - Math.floor(this.scrollY / this.rowH);
     ctx.font = "600 9px ui-monospace, monospace"; ctx.textBaseline = "middle";
     for (let p = pTop; this._yOf(p) < rollBot; p--) {
       if (p < PITCH_LO) break;
       const y = this._yOf(p), black = BLACK.has(((p % 12) + 12) % 12);
-      ctx.fillStyle = black ? "#1a0f13" : "#efe0c4"; ctx.fillRect(0, y, GUTTER_W - 1, this.rowH - 0.5);
-      if (p % 12 === 0) { ctx.fillStyle = "#7a5a2e"; ctx.fillText(`C${p / 12 - 1}`, 6, y + this.rowH / 2); }
+      ctx.fillStyle = black ? "#453425" : "#fdfaf2"; ctx.fillRect(0, y, GUTTER_W - 1, this.rowH - 0.5);
+      if (p % 12 === 0) { ctx.fillStyle = "#7a6650"; ctx.fillText(`C${p / 12 - 1}`, 6, y + this.rowH / 2); }
     }
     ctx.restore();
-    ctx.strokeStyle = "rgba(231,197,131,.25)"; ctx.beginPath(); ctx.moveTo(GUTTER_W + 0.5, RULER_H); ctx.lineTo(GUTTER_W + 0.5, rollBot); ctx.stroke();
+    ctx.strokeStyle = "rgba(54,38,25,.45)"; ctx.beginPath(); ctx.moveTo(GUTTER_W + 0.5, RULER_H); ctx.lineTo(GUTTER_W + 0.5, rollBot); ctx.stroke();
   }
 
   _drawVelLane(ctx, W, H) {
     const top = H - VEL_H, laneTop = top + 8, laneBot = H - 8;
-    ctx.fillStyle = "#120709"; ctx.fillRect(0, top, W, VEL_H);
-    ctx.strokeStyle = "rgba(231,197,131,.25)"; ctx.beginPath(); ctx.moveTo(0, top + 0.5); ctx.lineTo(W, top + 0.5); ctx.stroke();
-    ctx.fillStyle = "#b9903f"; ctx.font = "600 9px ui-monospace, monospace"; ctx.textBaseline = "top"; ctx.fillText("VELOCITY", 6, top + 5);
+    ctx.fillStyle = "#e7dcc4"; ctx.fillRect(0, top, W, VEL_H);
+    ctx.strokeStyle = "rgba(54,38,25,.45)"; ctx.beginPath(); ctx.moveTo(0, top + 0.5); ctx.lineTo(W, top + 0.5); ctx.stroke();
+    ctx.fillStyle = "#7a6650"; ctx.font = "600 9px ui-monospace, monospace"; ctx.textBaseline = "top"; ctx.fillText("VELOCITY", 6, top + 5);
     const t = this.active(); if (!t) return;
     ctx.save(); ctx.beginPath(); ctx.rect(GUTTER_W, top, W - GUTTER_W, VEL_H); ctx.clip();
     for (const n of t.notes) {
       const x = this._xOf(n.start); if (x < GUTTER_W - 4 || x > W) continue;
       const h = (laneBot - laneTop) * clamp(n.vel, 0, 1);
       ctx.globalAlpha = this.sel.has(n.id) ? 1 : 0.7;
-      ctx.fillStyle = this.sel.has(n.id) ? "#ffe3a3" : (t.color || "#e7c583");
+      ctx.fillStyle = this.sel.has(n.id) ? "#362619" : (t.color || "#8a6d4f");
       ctx.fillRect(Math.round(x), laneBot - h, 3, h);
     }
     ctx.globalAlpha = 1; ctx.restore();
@@ -524,8 +524,8 @@ export class PianoRoll {
     // marquee
     if (this._marquee) {
       const m = this._marquee, x = Math.min(m.x0, m.x1), y = Math.min(m.y0, m.y1), w = Math.abs(m.x1 - m.x0), h = Math.abs(m.y1 - m.y0);
-      ctx.fillStyle = "rgba(231,197,131,.12)"; ctx.fillRect(x, y, w, h);
-      ctx.strokeStyle = "rgba(255,227,163,.7)"; ctx.setLineDash([4, 2]); ctx.strokeRect(x + 0.5, y + 0.5, w, h); ctx.setLineDash([]);
+      ctx.fillStyle = "rgba(108,79,216,.10)"; ctx.fillRect(x, y, w, h);
+      ctx.strokeStyle = "rgba(108,79,216,.8)"; ctx.setLineDash([4, 2]); ctx.strokeRect(x + 0.5, y + 0.5, w, h); ctx.setLineDash([]);
     }
 
     // playhead (own layer so it never repaints the notes)
@@ -534,9 +534,9 @@ export class PianoRoll {
       if (this.follow) this._followPlayhead(pos, W);
       const x = this._xOf(pos);
       if (x >= GUTTER_W - 1 && x <= W) {
-        ctx.strokeStyle = "rgba(255,227,163,.9)"; ctx.lineWidth = 1.5;
+        ctx.strokeStyle = "rgba(54,38,25,.85)"; ctx.lineWidth = 1.5;
         ctx.beginPath(); ctx.moveTo(Math.round(x) + 0.5, RULER_H - 6); ctx.lineTo(Math.round(x) + 0.5, rollBot); ctx.stroke();
-        ctx.fillStyle = "#ffe3a3"; ctx.beginPath(); ctx.moveTo(x - 4, RULER_H - 6); ctx.lineTo(x + 4, RULER_H - 6); ctx.lineTo(x, RULER_H); ctx.fill();
+        ctx.fillStyle = "#362619"; ctx.beginPath(); ctx.moveTo(x - 4, RULER_H - 6); ctx.lineTo(x + 4, RULER_H - 6); ctx.lineTo(x, RULER_H); ctx.fill();
       }
     }
   }

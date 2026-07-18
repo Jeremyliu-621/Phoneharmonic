@@ -165,11 +165,11 @@ class App:
             self.session.wand = WandSlot(connected=True, variant=variant)
             log.info("wand connected (variant=%s)", variant)
         elif role in ("stage", "admin"):
-            # Phone wand is parked for now, so the stage QR means "join as an
+            # Phone wand is parked for now, so the console QR means "join as an
             # instrument" — over plain http (no secure context / cert warning
-            # needed for audio). `wand_url` is the key the stage QR reads.
-            # (To re-enable the wand later, point this at https://.../join/ — the
-            # choice page still exists.)
+            # needed for audio). `wand_url` is the key the console QR reads.
+            # (To re-enable the phone wand later, point this at
+            # https://.../wandsim/ on :8443 — that page still exists.)
             http_base = f"http://{self.lan_ip}:{HTTP_PORT}"
             config["wand_url"] = f"{http_base}/section/?s={self.session.name}"
             config["join_url"] = f"{http_base}/section/?s={self.session.name}"

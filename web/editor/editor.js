@@ -1,10 +1,10 @@
-// Control Room. A DAW-style surface around the live orchestra: the editable
+// The Editor. A DAW-style surface around the live orchestra: the editable
 // piano-roll (pianoroll.js) is the centrepiece; this module wires it to the
 // engine — seeding it from the current song, pushing hand-edits back as
 // `song.edit`, and driving a synced playhead from the shared clock. It also
 // hosts the transport, the track mixer, per-phone instruments, accompaniment
-// override, gesture readout and gesture recorder. It makes no sound itself; the
-// embedded stage plays the orchestra.
+// override, gesture readout and gesture recorder. It makes no sound itself;
+// the console tab and the phones play the orchestra.
 
 import { Conn } from "../shared/ws.js";
 import { Clock } from "../shared/clock.js";
@@ -17,7 +17,7 @@ const el = (id) => document.getElementById(id);
 
 const KEYS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 const INSTRUMENTS = ["violin", "viola", "cello", "flute", "clarinet", "piano", "bass", "synth", "bell", "drums"];
-const TRACK_COLORS = ["#e7c583", "#7fd1ff", "#6fcf7f", "#e58a6a", "#c79bff", "#ffd76a", "#79d6c0", "#f28ab2"];
+const TRACK_COLORS = ["#d9534a", "#e8a13c", "#57a639", "#8e5bd4", "#4a76d8", "#2f9e9e", "#d858a8", "#8a6d4f"];
 const NICE = {
   auto: "Auto", lower_imitation: "Lower imitation", contrary_motion: "Contrary motion",
   sustained: "Sustained chord", delayed: "Delayed echo", rhythmic_dense: "Rhythmic (busy)", rest: "Rest (silence)",
@@ -28,7 +28,7 @@ const pr = new PianoRoll(el("pianoroll"));
 
 // ---- ws + clock ----
 // distinct `key` so the editor's own connection doesn't share a client-id with
-// the stage it embeds in an iframe (they'd clobber each other in the hub).
+// the console open in another tab (they'd clobber each other in the hub).
 const conn = new Conn({ role: "stage", session, key: "editor" });
 const clock = new Clock((o) => conn.send(o));
 conn.on(P.CLOCK_PONG, (m) => clock.handlePong(m));
@@ -40,9 +40,6 @@ let recording = false;
 let tempoDragging = false;
 let transport = null;        // {playing, anchor, s16_ms, n_bars} for the playhead
 let pushTimer = null;
-
-// Embed the live stage (it plays the audio + shows the orchestra/QR).
-el("stageframe").src = `../stagepix/?s=${encodeURIComponent(session)}`;
 
 // ---- playhead: computed every frame from the synced clock ----
 pr.setPlayheadSource(() => {
