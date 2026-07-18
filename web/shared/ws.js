@@ -19,6 +19,7 @@ export class Conn {
     this.clientId = localStorage.getItem(`wm.clientId.${this._key}`) || null;
     this.ws = null;
     this.welcome = null;
+    this._queue = [];               // sends before the socket opens, flushed on connect
     this._handlers = new Map();     // type -> fn(msg)
     this._onOpen = null;            // fn(welcome)
     this._onClose = null;
@@ -43,6 +44,8 @@ export class Conn {
   send(obj) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(obj));
+    } else if (this._queue.length < 50) {
+      this._queue.push(obj);      // clicked before we connected — deliver on open
     }
   }
 
@@ -56,6 +59,7 @@ export class Conn {
         t: HELLO, v: PROTOCOL_VERSION, role: this.role,
         session: this.session, client_id: this.clientId, name: this.name,
       }));
+      for (const m of this._queue.splice(0)) ws.send(JSON.stringify(m));
     };
 
     ws.onmessage = (ev) => {

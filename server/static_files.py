@@ -45,8 +45,13 @@ def build_static_response(raw_path: str) -> Response:
 
     target = (WEB_DIR / rel).resolve()
 
-    # Directory -> its index.html
+    # Directory -> its index.html. A directory URL without a trailing slash
+    # must redirect first, or the page's relative assets (./app.js) resolve to
+    # the parent and 404 — a page full of dead buttons.
     if target.is_dir():
+        if not url_path.endswith("/"):
+            return Response(301, "Moved Permanently",
+                            Headers({"Location": url_path + "/", "Content-Length": "0"}), b"")
         target = (target / DIRECTORY_INDEX).resolve()
 
     # Traversal guard: target must live under WEB_DIR.
