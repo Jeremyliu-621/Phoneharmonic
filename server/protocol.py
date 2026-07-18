@@ -36,7 +36,10 @@ SCHED_NOTES = "sched.notes"     # {events:[{id, section, at, dur, note, vel, art
 SCHED_CANCEL = "sched.cancel"   # {ids?:[...], section?, after?} | {allnotesoff:true}
 ROSTER = "roster"               # {playing, sections:[...], wand:{...}, engine:{...}}
 ENGINE_STATE = "engine.state"   # {last_choice, gesture, playing, bpm, song}  live, on each change
-WAND_STATE = "wand.state"       # {grabbed, aim_section, yaw_deg}   -> stage/admin, throttled
+# {grabbed, aim_section, yaw_deg, imu?:{seq,batches,frames,invalid_frames,
+# seq_gaps,last_frame,last_rx_server_ms}} -> stage/admin, throttled
+WAND_STATE = "wand.state"
+WAND_CMD = "wand.cmd"           # {playing, mode:"ai"|"det", aim:section_id|null, seq}  -> wand: reflect show state on the board
 ANNOUNCE = "announce"           # {text, audio_b64?, mime?}  commentator line -> stage/admin
 FX_TENSION = "fx.tension"       # {value: 0..1}  proximity build-up -> sections + stage
 FX_EXPR = "fx.expr"             # {section, semis, gain}  deterministic-mode expression warp

@@ -42,6 +42,7 @@ from config import (
 from engine.candidates import GENERATORS
 from engine.conductor import Conductor
 from hub import ClientConn, Hub, send_json
+from imu_telemetry import ImuTelemetry
 from recording.recorder import GestureRecorder
 from scheduler import Scheduler
 from session import Section, SessionState, WandSlot
@@ -115,11 +116,13 @@ class App:
         self.aimer = WandAimer()
         self.showlog = ShowLog(DEFAULT_SESSION)
         self.announcer = Announcer(self._announce_line)
+        self.imu_telemetry = ImuTelemetry()
         self.lan_ip = detect_lan_ip()
         self._wand_client: str | None = None    # who owns the wand slot
         self._last_roster_ms = 0.0              # throttle for health-ping-triggered rosters
         self._last_aim: str | None = None
         self._last_state_ms = 0.0               # wand.state broadcast throttle
+        self._wand_cmd_seq = 0                  # wand.cmd downlink counter
         self._tension = 0.0
         self._last_tension_ms = 0.0
         self._last_expr = (0, 1.0)              # deterministic-mode (semis, gain) throttle
@@ -210,6 +213,8 @@ class App:
             variant = P.WAND_VARIANT[role]
             self.session.wand = WandSlot(connected=True, variant=variant)
             self._wand_client = client_id
+            self.imu_telemetry.reset()           # never mix diagnostics across wand owners
+            self._last_state_ms = 0.0
             self.wand.reset()                   # a fresh wand must not inherit a stale grab
             self.showlog.record("wand.connect", variant=variant)
             self.announcer.poke("wand.connect", f"The conductor's wand just came alive ({variant}).")
@@ -235,6 +240,8 @@ class App:
             "config": config,
         })
         await self._broadcast_roster()
+        if role in P.WAND_ROLES:
+            await self._notify_wand()           # sync the board to current state on connect
         return conn
 
     def _bind_section(self, conn: ClientConn) -> Section:
@@ -324,7 +331,9 @@ class App:
         # Wand input -> router (buffers frames per grab, hands the engine a
         # complete gesture window on release). IMU frames also feed aiming.
         if t == P.WAND_IMU:
-            frames = msg.get("frames", [])
+            frames = self.imu_telemetry.ingest(
+                msg.get("seq"), msg.get("frames"), server_time_ms(),
+            )
             self.wand.on_imu(frames)
             await self._update_aim(frames)
             return
@@ -354,6 +363,7 @@ class App:
                 self.showlog.record("wand.mode", mode=mode, param=self.session.wand.det_param)
                 log.info("wand mode -> %s (%s)", mode, self.session.wand.det_param)
                 await self._broadcast_roster()
+                await self._notify_wand()        # mode change reaches the board
             return
         if t == P.WAND_FEEDBACK:
             self.engine.on_feedback(int(msg.get("value", 0)))
@@ -436,6 +446,7 @@ class App:
             else:
                 self.recorder.stop()
         await self._broadcast_roster()
+        await self._notify_wand()               # pause/play reaches the board's LED
 
     async def _load_song(self, conn: ClientConn, name: str, b64: str) -> None:
         from engine.midi_load import load_midi_bytes
@@ -538,6 +549,21 @@ class App:
         await self.hub.broadcast({"t": P.FX_EXPR, "section": aim or P.SECTION_ALL,
                                   "semis": semis, "gain": gain}, roles=("section", "stage"))
 
+    async def _notify_wand(self) -> None:
+        """Reflect show state (pause/play, ai/det mode, selected phone) back to
+        the hardware wand so the board can drive its LED/haptics. No-op unless a
+        wand owns the slot; hub.send_to guards a dead socket."""
+        if self._wand_client is None:
+            return
+        self._wand_cmd_seq += 1
+        await self.hub.send_to(self._wand_client, {
+            "t": P.WAND_CMD,
+            "playing": self.session.playing,
+            "mode": self.session.wand.mode,
+            "aim": self._last_aim,
+            "seq": self._wand_cmd_seq,
+        })
+
     async def _update_aim(self, frames: list) -> None:
         self.aimer.on_frames(frames)
         aim = self.aimer.resolve(self._placements())
@@ -549,11 +575,13 @@ class App:
             self.engine.on_aim(aim)
             if aim:
                 self.showlog.record("wand.aim", section=aim)
+            await self._notify_wand()            # selected-phone change reaches the board
         elif now - self._last_state_ms < 150.0:
             return
         self._last_state_ms = now
         await self.hub.broadcast({"t": P.WAND_STATE, "grabbed": self.wand.grabbing,
-                                  "aim_section": aim, "yaw_deg": round(self.aimer.yaw, 1)},
+                                  "aim_section": aim, "yaw_deg": round(self.aimer.yaw, 1),
+                                  "imu": self.imu_telemetry.snapshot()},
                                  roles=("stage", "admin"))
 
     async def _wand_touch(self, pad: int, state: str) -> None:
