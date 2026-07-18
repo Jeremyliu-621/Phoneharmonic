@@ -17,6 +17,11 @@ HTTPS_PORT = int(os.environ.get("WM_HTTPS_PORT", "8443"))  # https/wss — wand-
 WS_PATH = "/ws"           # everything else on the port is served as a static file
 DEFAULT_SESSION = "lol1"
 
+# How long a dropped phone keeps its slot (instrument/placement) before the
+# section is deleted from the roster. Long enough to survive a screen-off nap +
+# ws ping timeout; short enough that closed tabs actually disappear.
+SECTION_GRACE_S = float(os.environ.get("WM_SECTION_GRACE_S", "90"))
+
 # --- Protocol ---
 PROTOCOL_VERSION = 1
 

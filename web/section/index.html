@@ -49,8 +49,34 @@
         <input type="range" id="trim" min="-100" max="100" value="0" step="1">
         <span id="trimval">0ms</span>
       </div>
+      <div class="full"><button id="leave">✕ leave the orchestra</button></div>
     </div>
   </div>
+
+  <!-- Phones suspend audio when the screen sleeps; resuming needs a real tap.
+       This makes that unmissable instead of a tiny HUD label. -->
+  <div id="unmute" style="display:none">
+    <h1>🔇</h1>
+    <p><b>Tap to unmute</b></p>
+    <p class="s">your phone paused the audio while the screen was off</p>
+  </div>
+
+  <div id="leftscreen" style="display:none">
+    <h1>👋</h1>
+    <p><b>You left the orchestra</b></p>
+    <p class="s">tap anywhere to rejoin</p>
+  </div>
+
+  <style>
+    #leave { width: 100%; margin-top: .35rem; padding: .55rem; font: 700 12px ui-monospace, monospace;
+      color: #f0b9b9; background: #2a1113; border: 1px solid #7a3a3e; border-radius: 6px; cursor: pointer; }
+    #unmute, #leftscreen { position: fixed; inset: 0; z-index: 50; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: .6rem; cursor: pointer; text-align: center;
+      background: radial-gradient(circle at 50% 40%, #241206f2, #0c0608fa); }
+    #unmute h1, #leftscreen h1 { font-size: 4rem; }
+    #unmute b, #leftscreen b { color: #e7c583; font-size: 1.2rem; }
+    #unmute .s, #leftscreen .s { opacity: .55; font-size: .85rem; max-width: 30ch; }
+  </style>
 
   <script type="module" src="./section.js"></script>
 </body>

@@ -5,6 +5,7 @@ export const PROTOCOL_VERSION = 1;
 export const HELLO = "hello";
 export const CLOCK_PING = "clock.ping";
 export const SECTION_READY = "section.ready";
+export const SECTION_LEAVE = "section.leave";
 export const WAND_IMU = "wand.imu";
 export const WAND_POSE = "wand.pose";   // CV (webcam) wand: [tw, x, y, z, roll_deg]
 export const WAND_GRAB = "wand.grab";

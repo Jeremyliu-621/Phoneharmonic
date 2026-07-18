@@ -10,6 +10,7 @@ from __future__ import annotations
 HELLO = "hello"                 # {role, session, client_id|null, name?}  first frame on every connection
 CLOCK_PING = "clock.ping"       # {id, t0}   t0 = client performance.now() ms, echoed back
 SECTION_READY = "section.ready" # {}         audio unlocked + samples loaded
+SECTION_LEAVE = "section.leave" # {}         explicit goodbye -> remove the slot immediately
 WAND_IMU = "wand.imu"           # {seq, frames:[[tw_ms, ax,ay,az, gx,gy,gz], ...]}  hw/phone wand
 WAND_POSE = "wand.pose"         # {seq, frames:[[tw_ms, x, y, z, roll_deg], ...]}   CV (webcam) wand
 WAND_GRAB = "wand.grab"         # {state:"start"|"end", tw}

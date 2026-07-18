@@ -20,6 +20,7 @@ let synth = null;
 let myId = null;
 let noteCount = 0;
 let recvCount = 0;
+let left = false;          // true after the Leave button — stops reconnect + overlays
 
 function onPlay(ev, peak) {
   pulse.style.background = peak >= 0.9 ? "#e7c583" : "#a8712a";
@@ -38,15 +39,34 @@ function updateHud() {
   if (!clock) return;
   el("theta").textContent = clock.theta === null ? "—" : clock.theta.toFixed(1) + "ms";
   el("rtt").textContent = clock.rtt === null ? "—" : clock.rtt.toFixed(1) + "ms";
-  // audio-context state: "running" = good; "suspended" = no sound (needs a tap)
+  // audio-context state: "running" = good; anything else = silent (needs a tap)
   if (synth && synth.ctx) {
     const st = synth.ctx.state;
     el("audio").textContent = st;
     el("audio").style.color = st === "running" ? "#6fcf7f" : "#e58a6a";
-    if (st === "suspended") synth.ctx.resume().catch(() => {});   // self-heal
+    if (st !== "running") {
+      synth.ctx.resume().catch(() => {});               // quiet self-heal first…
+      if (!left) el("unmute").style.display = "flex";   // …and an unmissable prompt
+    } else {
+      el("unmute").style.display = "none";
+    }
   }
 }
 setInterval(updateHud, 500);
+
+// The unmute tap runs inside a user gesture, so resume() is allowed. If the
+// context is beyond saving (iOS sometimes bricks it after a long nap), rebuild
+// it from scratch — new AudioContext, re-anchored clock, same instrument.
+el("unmute").addEventListener("click", async () => {
+  if (!synth) return;
+  try { await synth.ctx.resume(); } catch { /* fall through to rebuild */ }
+  if (synth.ctx.state !== "running") {
+    const old = synth.ctx;
+    try { await synth.unlock(); clock.attachAudio(synth.ctx); } catch {}
+    try { old.close(); } catch {}
+  }
+  if (synth.ctx.state === "running") el("unmute").style.display = "none";
+});
 
 setInterval(() => {
   if (conn && clock && clock.theta !== null) {
@@ -108,8 +128,21 @@ joinScreen.addEventListener("click", async () => {
   conn.connect();
 });
 
+// Leave: tell the server explicitly (slot frees at once, no grace period),
+// close the socket, and offer a clean rejoin.
+el("leave").addEventListener("click", () => {
+  left = true;
+  if (conn) { conn.send({ t: P.SECTION_LEAVE }); conn.close(); }
+  try { synth && synth.panic(); } catch {}
+  el("unmute").style.display = "none";
+  el("leftscreen").style.display = "flex";
+});
+el("leftscreen").addEventListener("click", () => location.reload());
+
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && synth && synth.ctx) synth.ctx.resume();
+  if (document.visibilityState !== "visible") return;
+  if (synth && synth.ctx) synth.ctx.resume().catch(() => {});
+  requestWakeLock();   // the OS silently releases wake locks on hide — take it back
 });
 // Tapping the performing screen re-unlocks audio if the context got suspended
 // (iOS/Android suspend it when backgrounded; resume must be in a user gesture).

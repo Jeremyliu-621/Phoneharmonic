@@ -32,6 +32,7 @@ from config import (
     HTTP_PORT,
     HTTPS_PORT,
     PROTOCOL_VERSION,
+    SECTION_GRACE_S,
     WS_PATH,
 )
 from engine.conductor import Conductor
@@ -225,6 +226,12 @@ class App:
                 await self._broadcast_roster()
             return
 
+        if t == P.SECTION_LEAVE:
+            # Explicit goodbye (the phone's Leave button): free the slot right away,
+            # no grace period.
+            await self._remove_section(conn.section_id, "left")
+            return
+
         if t == P.ADMIN_CMD:
             await self._admin(msg.get("cmd"), msg.get("args") or {})
             return
@@ -363,14 +370,31 @@ class App:
         self.engine.on_sections_changed(self.session.engine_sections())
         await self._broadcast_roster()
 
+    async def _remove_section(self, section_id: str | None, why: str) -> None:
+        """Delete a section from the roster (explicit leave, or grace expired)."""
+        if not section_id or section_id not in self.session.sections:
+            return
+        sec = self.session.sections.pop(section_id)
+        log.info("section %s removed (%s, was %s)", section_id, why, sec.instrument)
+        self.engine.on_sections_changed(self.session.engine_sections())
+        await self._broadcast_roster()
+
+    async def _reap_later(self, section_id: str) -> None:
+        """After the grace period, drop the section if its phone never came back."""
+        await asyncio.sleep(SECTION_GRACE_S)
+        sec = self.session.sections.get(section_id)
+        if sec and not sec.connected:
+            await self._remove_section(section_id, f"grace {SECTION_GRACE_S:.0f}s expired")
+
     async def _on_disconnect(self, conn: ClientConn) -> None:
         self.hub.unregister(conn.client_id)
         if conn.role == "section" and conn.section_id in self.session.sections:
-            # Keep the slot (instrument/placement) for the grace period; a rejoin
-            # with the same client_id rebinds it. For P1 we just mark it dropped.
+            # Keep the slot (instrument/placement) for a grace period so a
+            # screen-off phone rebinds as itself; reap it if it never returns.
             self.session.sections[conn.section_id].connected = False
             self.session.sections[conn.section_id].ready = False
             self.engine.on_sections_changed(self.session.engine_sections())
+            asyncio.create_task(self._reap_later(conn.section_id))
         elif conn.role in ("wand", "wand-sim"):
             self.session.wand = WandSlot()
         await self._broadcast_roster()
