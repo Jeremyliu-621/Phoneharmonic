@@ -28,6 +28,7 @@ export const SECTION_CONFIG = "section.config";
 export const SCHED_NOTES = "sched.notes";
 export const SCHED_CANCEL = "sched.cancel";
 export const ROSTER = "roster";
+export const ENGINE_STATE = "engine.state";   // live accompaniment/gesture updates
 export const WAND_STATE = "wand.state";
 export const ANNOUNCE = "announce";       // {text, audio_b64?, mime?}
 export const FX_TENSION = "fx.tension";   // {value: 0..1}

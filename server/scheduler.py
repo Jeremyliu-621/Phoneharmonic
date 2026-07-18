@@ -16,7 +16,7 @@ from clocksync import server_time_ms
 from config import LOOKAHEAD_MS, MIN_LEAD_MS, SCHED_TICK_MS
 from engine_api import MusicEngine
 from hub import Hub
-from protocol import SCHED_CANCEL, SCHED_NOTES
+from protocol import ENGINE_STATE, SCHED_CANCEL, SCHED_NOTES
 
 log = logging.getLogger("sched")
 
@@ -26,6 +26,7 @@ class Scheduler:
         self._engine = engine
         self._hub = hub
         self._task: asyncio.Task | None = None
+        self._seen_choice: str | None = None
 
     def start(self) -> None:
         if self._task is None:
@@ -83,3 +84,15 @@ class Scheduler:
         if safe:
             await self._hub.broadcast({"t": SCHED_NOTES, "events": safe},
                                       roles=("section", "stage"))
+
+        # 3) When the chosen accompaniment changes, push a light live update to the
+        # stage/editor (drives the "now playing" + change indicator, even laptop-only).
+        status = getattr(self._engine, "status", None)
+        if status:
+            st = status()
+            if st.get("last_choice") != self._seen_choice:
+                self._seen_choice = st.get("last_choice")
+                await self._hub.broadcast({
+                    "t": ENGINE_STATE, "last_choice": st["last_choice"], "gesture": st["gesture"],
+                    "playing": st["playing"], "bpm": st["bpm"], "song": st["song"],
+                }, roles=("stage", "admin"))
