@@ -72,13 +72,24 @@ function fromScreen(sx, sy, r = roomBox()) {
     py: Math.max(0, Math.min(1, (0.94 - sy / r.height) / 0.88)),
   };
 }
-// keep cards from landing on top of the camera hub: nudge radially out
-function nudgeOffHub(px, py) {
-  const dx = px, dy = (py - 0.5) * 2;               // roughly square-ish units
-  const d = Math.hypot(dx, dy);
-  if (d >= 0.42) return { px, py };
-  const f = 0.42 / (d || 1e-6);
-  return { px: Math.max(-1, Math.min(1, dx * f)), py: Math.max(0, Math.min(1, 0.5 + (dy * f) / 2)) };
+// keep a card fully OFF the camera hub: clamp its centre out of the real #cambox
+// rectangle grown by half the card (so the whole card, not just its centre,
+// clears the live CV). Works in screen space, then converts back to room coords.
+function clampOffHub(px, py, halfW = 50, halfH = 58, r = roomBox()) {
+  const cam = el("cambox").getBoundingClientRect();
+  if (!cam.width || !r.width) return { px, py };
+  const padX = halfW + 4, padY = halfH + 4;               // card half-size + a hair
+  const fx0 = (cam.left - r.left) - padX, fx1 = (cam.right - r.left) + padX;
+  const fy0 = (cam.top - r.top) - padY, fy1 = (cam.bottom - r.top) + padY;
+  const s = toScreen(px, py, r);
+  let x = s.x, y = s.y;
+  if (x > fx0 && x < fx1 && y > fy0 && y < fy1) {         // inside → push to nearest edge
+    const dL = x - fx0, dR = fx1 - x, dT = y - fy0, dB = fy1 - y;
+    const m = Math.min(dL, dR, dT, dB);
+    if (m === dL) x = fx0; else if (m === dR) x = fx1;
+    else if (m === dT) y = fy0; else y = fy1;
+  }
+  return fromScreen(x, y, r);
 }
 
 // ── grouping: phones sharing an instrument = one card, dragged together ──────
@@ -168,12 +179,17 @@ function drawLinks() {
       : toScreen(g.px, g.py, r);
     const c = colorOf(g.instrument);
     const aimed = g.key === aimedGroup;
-    const A = `x1="${hub.x}" y1="${hub.y}" x2="${p.x}" y2="${p.y}"`;
+    // orthogonal "flow-chart" elbow: run along the dominant axis out of the hub,
+    // turn once, and come into the card square (rounded corner via linejoin)
+    const horizFirst = Math.abs(p.x - hub.x) >= Math.abs(p.y - hub.y);
+    const cx = horizFirst ? p.x : hub.x;
+    const cy = horizFirst ? hub.y : p.y;
+    const d = `M ${hub.x} ${hub.y} L ${cx} ${cy} L ${p.x} ${p.y}`;
     // soft coloured glow → dark ink underlay (reads on busy art) → solid core → bright flowing strand
-    out += `<line ${A} stroke="${c}" stroke-opacity="${aimed ? 0.55 : 0.3}" stroke-width="${aimed ? 10 : 7.5}" filter="url(#cableglow)"/>`;
-    out += `<line ${A} stroke="#362619" stroke-opacity="0.3" stroke-width="${aimed ? 7 : 5.4}"/>`;
-    out += `<line ${A} stroke="${c}" stroke-opacity="${aimed ? 0.95 : 0.55}" stroke-width="${aimed ? 3.4 : 2}"/>`;
-    out += `<line class="flow" ${A} stroke="#fbf2dd" stroke-opacity="${aimed ? 0.9 : 0.6}" stroke-width="${aimed ? 2 : 1.5}"/>`;
+    out += `<path d="${d}" stroke="${c}" stroke-opacity="${aimed ? 0.55 : 0.3}" stroke-width="${aimed ? 10 : 7.5}" filter="url(#cableglow)"/>`;
+    out += `<path d="${d}" stroke="#362619" stroke-opacity="0.3" stroke-width="${aimed ? 7 : 5.4}"/>`;
+    out += `<path d="${d}" stroke="${c}" stroke-opacity="${aimed ? 0.95 : 0.55}" stroke-width="${aimed ? 3.4 : 2}"/>`;
+    out += `<path class="flow" d="${d}" stroke="#fbf2dd" stroke-opacity="${aimed ? 0.9 : 0.6}" stroke-width="${aimed ? 2 : 1.5}"/>`;
   });
   el("links").innerHTML = out;
 }
@@ -191,7 +207,7 @@ function attachDrag(node, key) {
     dragging.x0 = e.clientX; dragging.y0 = e.clientY;
     const r = roomBox();
     const raw = fromScreen(e.clientX - r.left, e.clientY - r.top, r);
-    const pos = nudgeOffHub(raw.px, raw.py);
+    const pos = clampOffHub(raw.px, raw.py, node.offsetWidth / 2, node.offsetHeight / 2, r);
     const g = groups.find((x) => x.key === key);
     if (!g) return;
     g.px = pos.px; g.py = pos.py; g.placed = true;
@@ -269,7 +285,15 @@ function applyEngine(eng) {
   if (eng.song !== curSong) { curSong = eng.song; dropIdle(); }   // new song landed
   if (eng.bars) el("barslbl").textContent = eng.bars + " bars";
   if (eng.transport) transport = eng.transport;
-  engineAimed = eng.aimed || null;
+  // The server's aim is the truth (tap OR the camera's SELECT pointing) — the
+  // glowing card must follow it, whoever set it. ENGINE_STATE omits `aimed`,
+  // so only rosters (which carry the full status) may move it.
+  if (eng.aimed !== undefined) {
+    engineAimed = eng.aimed || null;
+    const g2 = engineAimed ? groups.find((x) => x.members.some((m) => m.id === engineAimed)) : null;
+    const key = g2 ? g2.key : null;
+    if (key !== aimedGroup) { aimedGroup = key; upsertCards(); }
+  }
 
   const g = eng.gesture;
   if (g) {

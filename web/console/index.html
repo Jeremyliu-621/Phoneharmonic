@@ -108,7 +108,7 @@
         linear-gradient(90deg, rgba(54,38,25,.08) 1px, transparent 1px);
       background-size: 30px 30px; }
     #links { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-    #links line { stroke-linecap: round; }
+    #links line, #links path { fill: none; stroke-linecap: round; stroke-linejoin: round; }
     #links .flow { stroke-dasharray: 4 8; animation: flow 1.1s linear infinite; }
     @keyframes flow { to { stroke-dashoffset: -12; } }
 
@@ -320,12 +320,13 @@
         <b>tap</b> it to conduct just that instrument</div>
       <details id="moves" open>
         <summary>✨ Moves</summary>
-        <div class="mv"><span class="ic">🤏</span><div><b>Pinch + move</b><i>conduct — shape the music</i></div></div>
-        <div class="mv"><span class="ic">🙌</span><div><b>Slow lift (pinched)</b><i>swell — builds to a climax</i></div></div>
-        <div class="mv"><span class="ic">🤫</span><div><b>Small, calm moves</b><i>hush — softer and simpler</i></div></div>
-        <div class="mv"><span class="ic">⚡</span><div><b>Big, fast moves</b><i>harmony · arpeggios · runs</i></div></div>
-        <div class="mv"><span class="ic">✋</span><div><b>Hold open palm</b><i>play / pause the show</i></div></div>
-        <div class="mv"><span class="ic">👋</span><div><b>Palm swipe ←→</b><i>rewind / skip 4 bars</i></div></div>
+        <div class="mv"><span class="ic">✋</span><div><b>Open palm</b><i>play</i></div></div>
+        <div class="mv"><span class="ic">✊</span><div><b>Fist</b><i>pause</i></div></div>
+        <div class="mv"><span class="ic">🤟</span><div><b>Three fingers</b><i>AI mode — pinch + wave conducts:<br>
+          calm = hush · big = harmony &amp; runs</i></div></div>
+        <div class="mv"><span class="ic">☝️</span><div><b>One finger</b><i>select — point at a phone to solo it</i></div></div>
+        <div class="mv"><span class="ic">✌️</span><div><b>Two fingers</b><i>deterministic mode (wand control)</i></div></div>
+        <div class="mv"><span class="ic">🤏</span><div><b>Pinch + drag ←→</b><i>rewind / skip 4 bars (outside AI)</i></div></div>
         <div class="mv"><span class="ic">🎯</span><div><b>Tap a phone card</b><i>solo that instrument</i></div></div>
       </details>
     </div>

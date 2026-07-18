@@ -45,7 +45,19 @@ let grabbed = false;
 let seq = 0;
 let poseBuf = [];
 const trail = [];             // {xm, y, grabbed}
-let palmSince = 0, palmXs = [], lastTransport = 0, playing = true;
+let playing = true;
+
+// ── the demo-flow gesture vocabulary (docs/demo_flow.md) ─────────────────────
+// The webcam hand sets MODES and transport; conducting happens in AI mode.
+//   ✋ PALM = play      ✊ FIST = pause     🤏 PINCH: AI = conduct, else scrub ±4 bars
+//   ☝ ONE_FINGER = SELECT (point at an instrument to solo it)
+//   ✌ TWO_FINGERS = DETERMINISTIC mode    🤟 THREE_FINGERS = AI mode
+const STABLE_FRAMES = 6;            // discrete gestures debounce; conducting stays instant
+let cvMode = "AI";                  // start ready to conduct
+let rawGesture = null, rawCount = 0, cvGesture = null;
+let roster = [];                    // connected sections, left->right (for SELECT aiming)
+let lastAimId = null, lastAimMs = 0;
+let scrubX = null, lastScrub = 0;
 
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
@@ -109,12 +121,19 @@ function connect() {
   // No guesswork: the engine reports what each gesture ACTUALLY did (`device`),
   // and we flash it on screen in the exact words of the console's moves card.
   conn.on(P.ENGINE_STATE, (m) => {
+    if (m.playing !== undefined) playing = m.playing;   // transport truth
     if (m.device === undefined || m.device === lastDevice) return;
     const first = lastDevice === null;
     lastDevice = m.device;
     if (first) return;                    // initial sync, not something you did
     const fx = effectLabel(m.device);
     flashCmd(`${fx.icon} ${fx.label}`);
+  });
+  // roster: SELECT-mode pointing sweeps the connected phones left -> right
+  conn.on(P.ROSTER, (m) => {
+    roster = (m.sections || []).filter((s) => s.connected)
+      .map((s) => ({ id: s.id, px: s.px ?? 0, instrument: s.instrument }))
+      .sort((a, b) => a.px - b.px);
   });
   conn.connect();
 }
@@ -131,7 +150,11 @@ function loop(now) {
   } catch (e) { /* transient frames before video is ready */ }
 
   if (landmarks) processHand(landmarks, now);
-  else if (grabbed) endGrab(now);   // hand left frame while grabbing -> release
+  else {
+    if (grabbed) endGrab(now);      // hand left frame while grabbing -> release
+    rawGesture = null; rawCount = 0;
+    if (cvGesture !== null) { cvGesture = null; sendCvState(); }
+  }
 
   draw(landmarks);
   requestAnimationFrame(loop);
@@ -141,48 +164,100 @@ function processHand(lm, now) {
   const tip = lm[INDEX_TIP];
   const handW = dist(lm[INDEX_MCP], lm[PINKY_MCP]) || 0.001;
   const pinchRatio = dist(lm[THUMB_TIP], lm[INDEX_TIP]) / handW;
+  const xm = 1 - tip.x;   // mirror x for a selfie-natural feel
 
-  // Grab state machine (hysteresis).
-  if (!grabbed && pinchRatio < GRAB_ON) startGrab(now);
-  else if (grabbed && pinchRatio > GRAB_OFF) endGrab(now);
+  // ── discrete gesture layer: debounced, drives modes/transport/cv.state ────
+  const g = classify(lm, pinchRatio);
+  if (g === rawGesture) rawCount++;
+  else { rawGesture = g; rawCount = 1; }
+  if (rawCount === STABLE_FRAMES && g !== cvGesture) commitGesture(g, xm);
 
-  // Pose frame: mirror x for a selfie-natural feel; roll from wrist->middle-MCP.
-  const xm = 1 - tip.x;
+  // ── conducting pinch: INSTANT in AI mode (the feel stays exactly as-is) ───
+  if (cvMode === "AI") {
+    if (!grabbed && pinchRatio < GRAB_ON) startGrab(now);
+    else if (grabbed && pinchRatio > GRAB_OFF) endGrab(now);
+  } else if (grabbed) {
+    endGrab(now);                       // left AI mode mid-grab: close the window
+  }
+
+  // ── mode behaviours ───────────────────────────────────────────────────────
+  if (cvMode === "SELECT" && cvGesture !== "PINCH") aimAt(xm, now);
+  if (cvMode !== "AI" && cvGesture === "PINCH") scrub(xm, now);
+  else scrubX = null;
+
+  // Pose frame stream (the server only buffers these inside AI-mode grabs).
   const roll = Math.atan2(lm[MIDDLE_MCP].y - lm[WRIST].y, lm[MIDDLE_MCP].x - lm[WRIST].x) * 180 / Math.PI;
   poseBuf.push([Math.round(now), +xm.toFixed(4), +tip.y.toFixed(4), +tip.z.toFixed(4), +roll.toFixed(1)]);
   if (poseBuf.length >= POSE_BATCH) flushPose();
 
   trail.push({ xm, y: tip.y, grabbed });
   if (trail.length > TRAIL_LEN) trail.shift();
-
-  // Open palm = global transport (all four fingers extended, no pinch).
-  const open = !grabbed && [[INDEX_TIP, INDEX_PIP], [MIDDLE_TIP, MIDDLE_PIP],
-                            [RING_TIP, RING_PIP], [PINKY_TIP, PINKY_PIP]]
-    .every(([t2, p2]) => dist(lm[t2], lm[WRIST]) > dist(lm[p2], lm[WRIST]) * 1.15);
-  handlePalm(open, xm, now);
 }
 
-// Open palm = the DJ's global transport hand: hold it ~0.6s to stop/start the
-// show; swipe it left/right to rewind/skip 4 bars (beat-locked on the server).
-function handlePalm(open, xm, now) {
-  if (!open) { palmSince = 0; palmXs = []; return; }
-  palmXs.push({ t: now, xm });
-  while (palmXs.length && now - palmXs[0].t > 350) palmXs.shift();
-  if (now - lastTransport < 1200) return;
-  const dx = palmXs.length > 3 ? xm - palmXs[0].xm : 0;
-  if (Math.abs(dx) > 0.22) {                     // swipe: jump the timeline
-    send({ t: P.ADMIN_CMD, cmd: dx < 0 ? "rewind" : "forward" });
-    lastTransport = now; palmSince = 0; palmXs = [];
-    flashCmd(dx < 0 ? "⏪ rewind 4 bars" : "⏩ forward 4 bars");
-    return;
+// One discrete gesture per frame, from the closed cv.state vocabulary.
+function classify(lm, pinchRatio) {
+  if (pinchRatio < GRAB_ON) return "PINCH";
+  const ext = (t2, p2) => dist(lm[t2], lm[WRIST]) > dist(lm[p2], lm[WRIST]) * 1.15;
+  const f = [ext(INDEX_TIP, INDEX_PIP), ext(MIDDLE_TIP, MIDDLE_PIP),
+             ext(RING_TIP, RING_PIP), ext(PINKY_TIP, PINKY_PIP)];
+  const n = f.filter(Boolean).length;
+  if (n === 0) return "FIST";
+  if (n === 4) return "PALM";
+  if (f[0] && n === 1) return "ONE_FINGER";
+  if (f[0] && f[1] && n === 2) return "TWO_FINGERS";
+  if (f[0] && f[1] && f[2] && n === 3) return "THREE_FINGERS";
+  return null;
+}
+
+function commitGesture(g, xm) {
+  cvGesture = g;
+  if (g === "PALM" && !playing) {
+    playing = true; send({ t: P.ADMIN_CMD, cmd: "start" }); flashCmd("✋ play");
+  } else if (g === "FIST" && playing) {
+    playing = false; send({ t: P.ADMIN_CMD, cmd: "stop" }); flashCmd("✊ pause");
+  } else if (g === "ONE_FINGER") setMode("SELECT");
+  else if (g === "TWO_FINGERS") setMode("DETERMINISTIC");
+  else if (g === "THREE_FINGERS") setMode("AI");
+  else if (g === "PINCH" && cvMode !== "AI") scrubX = xm;   // scrub reference
+  sendCvState();
+}
+
+function setMode(m) {
+  if (cvMode === m) return;
+  cvMode = m;
+  el("mode").textContent = { SELECT: "☝ SELECT", DETERMINISTIC: "✌ DET", AI: "🤟 AI" }[m];
+  if (m === "DETERMINISTIC") send({ t: P.WAND_MODE, mode: "det" });
+  if (m === "AI") send({ t: P.WAND_MODE, mode: "ai" });
+  flashCmd({ SELECT: "☝ select — point at an instrument",
+             DETERMINISTIC: "✌ deterministic mode",
+             AI: "🤟 AI mode — pinch + wave to conduct" }[m]);
+}
+
+// SELECT mode: the index finger sweeps the connected phones left -> right;
+// pointing solos the one under your finger (the console card glows).
+function aimAt(xm, now) {
+  if (!roster.length || now - lastAimMs < 350) return;
+  const idx = Math.max(0, Math.min(roster.length - 1, Math.floor(xm * roster.length)));
+  const s = roster[idx];
+  if (s.id === lastAimId) return;
+  lastAimId = s.id; lastAimMs = now;
+  send({ t: P.ADMIN_CMD, cmd: "aim", args: { section_id: s.id } });
+  flashCmd(`🎯 ${s.instrument || s.id}`);
+}
+
+// Non-AI pinch: drag left/right to scrub the timeline ±4 bars (beat-locked).
+function scrub(xm, now) {
+  if (scrubX === null) { scrubX = xm; return; }
+  const dx = xm - scrubX;
+  if (Math.abs(dx) > 0.18 && now - lastScrub > 700) {
+    send({ t: P.ADMIN_CMD, cmd: dx > 0 ? "forward" : "rewind" });
+    flashCmd(dx > 0 ? "⏩ forward 4 bars" : "⏪ rewind 4 bars");
+    lastScrub = now; scrubX = xm;
   }
-  if (!palmSince) palmSince = now;
-  else if (now - palmSince > 600) {              // hold: stop / start
-    playing = !playing;
-    send({ t: P.ADMIN_CMD, cmd: playing ? "start" : "stop" });
-    lastTransport = now; palmSince = 0;
-    flashCmd(playing ? "▶ start" : "⏸ stop");
-  }
+}
+
+function sendCvState() {
+  send({ t: P.CV_STATE, gesture: cvGesture, mode: cvMode, confidence: 0.9 });
 }
 
 function flashCmd(text) {

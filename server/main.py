@@ -352,9 +352,12 @@ class App:
             return
 
         if t == P.CV_STATE:
-            if conn.role != "admin":
+            # Chloe's standalone CV app joins as admin; the console's hub camera
+            # (the same recognizer vocabulary) joins as wand-cv. Both are the
+            # webcam recognizer — accept both, nobody else.
+            if conn.role != "admin" and conn.role not in P.WAND_ROLES:
                 await send_json(conn.ws, {"t": P.ERR, "code": "forbidden",
-                                          "msg": "admin role required for cv.state"})
+                                          "msg": "admin/wand role required for cv.state"})
                 return
             gesture = msg.get("gesture")
             mode = msg.get("mode")
@@ -406,10 +409,11 @@ class App:
             return
 
         # The performer's other hand: CV-palm / wand hardware may drive transport
-        # (only these verbs — a rogue wand can pause the show, never hijack it).
+        # and SELECT-mode aiming (only these verbs — a rogue wand can pause the
+        # show or solo a phone, never load songs or change volumes).
         if (t == P.ADMIN_CMD and conn.role in P.WAND_ROLES
-                and msg.get("cmd") in ("start", "stop", "rewind", "forward")):
-            await self._admin(msg.get("cmd"), {})
+                and msg.get("cmd") in ("start", "stop", "rewind", "forward", "aim")):
+            await self._admin(msg.get("cmd"), msg.get("args") or {})
             return
 
         # Show control: only the stage/editor may drive the show — the join QR
