@@ -8,6 +8,8 @@ import { pickLeftHand } from "./cv/handedness.js";
 import { MidiPlayer } from "./midi/player.js";
 import { Timeline } from "./midi/timeline.js";
 import { GestureRouter } from "./midi/commands.js";
+import { Conn } from "./net/conn.js";
+import { ServerEmitter } from "./net/emit.js";
 
 const el = (id) => document.getElementById(id);
 const video = el("video");
@@ -44,6 +46,17 @@ const stabilizer = new GestureStabilizer({ confirmFrames: 3, releaseFrames: 4, r
 let currentMode = "NONE";
 let currentModeGesture = null;
 let fpsEMA = 0;
+let pinchAnchorX = null;   // free-hand X captured when a pinch starts (scrub direction)
+
+// --- server link (optional) ---
+// Joins the Phoneharmonic laptop server as role "admin" and mirrors transport +
+// mode onto the wire. NOT a wand role: the physical Arduino owns the wand slot.
+// If the server is unreachable, sends queue then drop and the app still works.
+const conn = new Conn({ role: "admin", session: "lol1", name: "cv-gestures" });
+const emitter = new ServerEmitter(conn, { onEmit: (m) => logLine(`↗ <b>${m}</b>`) });
+conn.onOpen(() => setServerStatus(true));
+conn.onClose(() => setServerStatus(false));
+conn.connect();
 
 // --- MIDI editor ---
 const player = new MidiPlayer({ onChange: refreshTransport });
@@ -117,6 +130,20 @@ function onFrame(hands, dtMs) {
   const handX = control ? 1 - control.hand.landmarks[L.WRIST].x : null;
   router.update({ event, active: stabilizer.active, handX });
 
+  // Pinch as a server transport scrub: capture the free-hand X on grab, and on
+  // release emit rewind/forward from the net horizontal travel (TODO pinch±dir).
+  if (event?.gesture === "PINCH") {
+    if (event.phase === "enter") {
+      pinchAnchorX = handX;
+    } else if (event.phase === "exit") {
+      if (pinchAnchorX != null && handX != null) {
+        const dx = handX - pinchAnchorX;
+        if (Math.abs(dx) > 0.12) emitter.transport(dx > 0 ? "forward" : "rewind");
+      }
+      pinchAnchorX = null;
+    }
+  }
+
   updatePanel(control, label, score);
   updateTrackingStatus(control);
   draw(control);
@@ -133,6 +160,9 @@ function handleEvent(event, control) {
     } else {
       showBadge(event.gesture);
     }
+    // Transport verbs -> server (in addition to the local Tone.js editor).
+    if (event.gesture === "PALM") emitter.transport("start");
+    else if (event.gesture === "FIST") emitter.transport("stop");
     logLine(`<b>${event.gesture}</b> · ${hand} hand`);
   } else if (!MODE_BY_GESTURE[event.gesture]) {
     hideBadge();
@@ -183,12 +213,20 @@ function setMode(mode, gesture) {
   el("modeModal").dataset.mode = mode;
   el("modeName").textContent = meta.name;
   el("modeInstruction").textContent = meta.instruction;
+  emitter.mode(mode);   // DETERMINISTIC->det, AI->ai; SELECT/NONE are local-only
 }
 
 function updateTrackingStatus(control) {
   const status = el("leftStatus");
   status.textContent = control ? "Left hand detected" : "Left hand not detected";
   status.classList.toggle("ok", Boolean(control));
+}
+
+function setServerStatus(ok) {
+  const s = el("serverStatus");
+  if (!s) return;
+  s.textContent = ok ? "Connected" : "Offline";
+  s.classList.toggle("free", ok);
 }
 
 function logLine(html) {
