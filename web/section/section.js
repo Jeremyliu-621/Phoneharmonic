@@ -77,7 +77,9 @@ joinScreen.addEventListener("click", async () => {
       if (e.section === P.SECTION_ALL || e.section === myId) synth.schedule(e);
     }
   });
-  conn.on(P.SCHED_CANCEL, (m) => { if (m.allnotesoff) synth.panic(); });
+  conn.on(P.SCHED_CANCEL, (m) => {   // global panic, or a targeted cut of MY notes (solo)
+    if (m.allnotesoff || m.section === myId) synth.panic();
+  });
   conn.on(P.FX_TENSION, (m) => synth.setTension(m.value));
   conn.on(P.FX_EXPR, (m) => {   // targeted phones warp; everyone else resets
     if (m.section === P.SECTION_ALL || m.section === myId) synth.setExpression(m.semis, m.gain);

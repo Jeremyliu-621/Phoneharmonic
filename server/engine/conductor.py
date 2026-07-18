@@ -148,6 +148,14 @@ class Conductor:
                             for i, m in enumerate(voice_triad(chord, base=64))]
 
     def on_aim(self, section_id: str | None) -> None:
+        # Engaging solo cuts every OTHER phone's in-flight notes immediately —
+        # isolation is heard in ~one scheduler tick, not at the next bar line.
+        # Releasing solo lets the room come back on the beat (no cancels).
+        if (section_id and section_id != self._aim and self._playing
+                and any(s.section_id == section_id for s in self._sections)):
+            for s in self._sections:
+                if s.section_id != section_id:
+                    self._cancels.append(CancelSpec(section=s.section_id))
         self._aim = section_id
 
     def on_feedback(self, value: int) -> None:

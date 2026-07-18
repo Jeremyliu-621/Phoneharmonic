@@ -44,9 +44,11 @@ def loaded_conductor() -> Conductor:
 
 
 def units() -> None:
-    print("[1] aiming SOLOS the targeted phone (everyone else mutes)")
+    print("[1] aiming SOLOS the targeted phone (everyone else mutes, instantly)")
     c = loaded_conductor()
     c.on_aim("s2")
+    cancels = c.get_cancels()
+    assert [sp.section for sp in cancels] == ["s1"], cancels   # in-flight cut, no bar wait
     ev = c.get_events(0.0, 0.0)
     assert ev and {e.section for e in ev} == {"s2"}, {e.section for e in ev}
     c.on_aim(None)
