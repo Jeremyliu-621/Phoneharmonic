@@ -38,7 +38,10 @@ SCORE = (
     + [("build",   0, 0.95, 0.98, 1, 0, 0, 0, 0, 0)]
     + [("build",   0, 1.05, 1.00, 1, 1, 0, 0, 0, 0)]
     + [("build",   0, 1.15, 1.03, 1, 1, 1, 0, 0, 1)]
-    + [("CLIMAX",  0, 1.25, 1.04, 1, 1, 1, 1, 1, 0)]
+    # Climax = clarity, not pile-up: accompaniment SIMPLIFIES (thin 1), the
+    # shimmer layer drops out, and the melody + its octave own the bar over
+    # the rolled chord. Loud is a hierarchy, not a sum.
+    + [("CLIMAX",  1, 1.10, 1.04, 1, 1, 0, 1, 1, 0)]
     + [("release", 0, 0.85, 0.97, 0, 0, 0, 0, 0, 0)]
     + [("release", 0, 1.00, 1.00, 0, 0, 0, 0, 0, 0)] * 3
 )
@@ -85,7 +88,10 @@ def main() -> int:
             for (on, dur, midi, vel) in notes:
                 if luft and on >= 14:            # the breath before the climax
                     continue
-                v = vel * (max(0.85, vmul) if part.is_melody else vmul)
+                # Velocity hierarchy at the top: melody leads, everything else
+                # sits beneath it — that's what makes loud read as MUSIC.
+                acc_mul = min(vmul, 0.75) if dbl else vmul
+                v = vel * (max(0.9, vmul) if part.is_melody else acc_mul)
                 emit(t + on * s16, dur * s16, midi, v, part.instrument)
                 if part.is_melody and dbl:       # climax: melody shines an octave up
                     emit(t + on * s16, dur * s16, midi + 12, v * 0.7, "violin")
