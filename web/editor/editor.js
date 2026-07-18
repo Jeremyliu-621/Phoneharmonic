@@ -149,6 +149,13 @@ conn.on(P.ROSTER, (m) => {
   }
 });
 
+// Live accompaniment/gesture updates (fires the moment the choice changes).
+conn.on(P.ENGINE_STATE, (m) => {
+  el("nowplaying").textContent = m.last_choice ? (NICE[m.last_choice] || m.last_choice) : "—";
+  const g = m.gesture;
+  for (const k of ["energy", "size", "vertical", "rotation"]) el("g_" + k).textContent = g ? g[k].toFixed(2) : "—";
+});
+
 conn.onOpen((wc) => { el("status").textContent = `connected · session ${wc.config.session}`; });
 conn.onClose(() => { el("status").textContent = "reconnecting…"; });
 

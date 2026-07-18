@@ -27,7 +27,8 @@ CLOCK_PONG = "clock.pong"       # {id, t0, ts}   ts = server_time_ms() at handli
 SECTION_CONFIG = "section.config"  # {section_id, instrument, color, samples}
 SCHED_NOTES = "sched.notes"     # {events:[{id, section, at, dur, note, vel, art}]}
 SCHED_CANCEL = "sched.cancel"   # {ids?:[...], section?, after?} | {allnotesoff:true}
-ROSTER = "roster"               # {playing, sections:[...], wand:{...}}
+ROSTER = "roster"               # {playing, sections:[...], wand:{...}, engine:{...}}
+ENGINE_STATE = "engine.state"   # {last_choice, gesture, playing, bpm, song}  live, on each change
 WAND_STATE = "wand.state"       # {grabbed, aim_section, yaw_deg}   -> stage only, ~15 Hz
 ERR = "err"                     # {code, msg}
 
