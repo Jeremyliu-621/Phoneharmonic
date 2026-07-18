@@ -41,7 +41,7 @@ def build_static_response(raw_path: str) -> Response:
     url_path = urllib.parse.urlparse(raw_path).path
     rel = urllib.parse.unquote(url_path).lstrip("/")
     if rel == "":
-        rel = "home/" + DIRECTORY_INDEX  # bare host -> the landing menu
+        rel = "console/" + DIRECTORY_INDEX  # bare host -> the console (the app IS the landing)
 
     target = (WEB_DIR / rel).resolve()
 
