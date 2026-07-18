@@ -74,3 +74,5 @@ bridge process. Plug it in, it joins, and it starts streaming.
 - `firmware/BACKEND_NOTES.md` — what the laptop server expects from the wand.
 - `firmware/IMPLEMENTATION_PLAN.md` — the full design and the reasoning behind it.
 - `firmware/uno_q/TEST_PLAN.md` — step-by-step checks to confirm it all works.
+- `firmware/uno_q/stream_probe/` — isolated, one-command physical test of
+  Movement → Bridge → onboard Linux → WiFi → production server streaming.
