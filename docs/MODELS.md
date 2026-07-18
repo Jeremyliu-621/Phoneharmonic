@@ -31,12 +31,21 @@ WM_MODEL_KEY / WM_BARMODEL_KEY = the org's Freesolo API key
 Fallback chain if serving is ever down: `tools/mock_model.py` locally, and the
 deterministic theory in `engine/harmony.py` under everything.
 
-## Next planned run (do NOT replace the keeper — new runs get NEW ids)
+## Theory-device SFT v3 — judge-approved, on ear trial (2026-07-18)
 
-Theory-device model: the deep-researched catalog of diatonic composer devices
-(approach runs/glissandi, suspensions, passing tones, pedal points, ...) as
-new styles with generators + rewards. The keeper stays deployed until the new
-one beats it by ear AND by judge.
+| Model | Run id |
+|---|---|
+| Bar-line v3 (theory devices: +passing/arpeggio/echo styles), Qwen3.5-4B SFT | `flash-1784407398-edf55491` |
+
+Eval (server/tools/eval_barmodel.py, 10 rows/style, retry-on-timeout):
+harmonize **0.990** / passing **0.990** / arpeggio **0.988** / dense 0.990 /
+calm 0.977 — every style matches the deterministic teacher, 0 format failures,
+and harmonize BEATS the keeper's 0.963. The live demo now serves v3 with
+`WM_BARMODEL_STYLES=harmonize,dense,calm,counter,echo,free,passing,arpeggio`;
+the keeper remains deployed and is the instant rollback (swap
+WM_BARMODEL_NAME back and drop the styles var). v3 becomes the new keeper only
+after it survives the ear test. Next: GRPO chained from this adapter
+(`init_from_adapter` in freesolo/barline/configs/rl.toml).
 
 Ear verdicts on the ship-now devices (2026-07-18, Zora's Domain renders):
 harmonize + hush strongest, arpeggio + passing good, **echo CUT** (sounded
