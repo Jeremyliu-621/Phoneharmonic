@@ -24,7 +24,7 @@
                       50% { text-shadow: 0 0 26px rgba(255,224,140,.8), 0 0 40px rgba(255,157,60,.5), 0 3px 0 #6a3d10; } }
     .tag { color: var(--gold-dim); font-size: clamp(1rem, 3vw, 1.25rem); margin-top: .6rem; letter-spacing: .04em; }
 
-    .cards { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem; margin: 2.5rem 0 1.5rem;
+    .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin: 2.5rem 0 1.5rem;
       width: 100%; max-width: 780px; }
     @media (max-width: 680px) { .cards { grid-template-columns: 1fr; max-width: 340px; } }
     a.card { text-decoration: none; color: var(--cream); background: var(--panel);
@@ -47,8 +47,9 @@
 
   <a class="card primary" href="./console/" style="max-width:780px; width:100%; margin-top:2rem; display:block">
     <div class="ico">🎛️</div><div class="t">Enter the Console</div>
-    <div class="s">The whole show on one screen — live camera-wand in the middle, phones connecting to it,
-      the score on the left, your gesture on the right, a live piano roll along the bottom.</div>
+    <div class="s">The room is the interface — your hand conducts on camera in the middle, phones are
+      cards you drag to match the real room, tap one to conduct it alone. Score, gestures, and a
+      live piano roll around it.</div>
   </a>
 
   <a class="card" href="./start/" style="max-width:780px; width:100%; margin-top:1rem; display:block">
@@ -57,13 +58,9 @@
   </a>
 
   <div class="cards">
-    <a class="card" href="./place/">
-      <div class="ico">🎯</div><div class="t">Seating &amp; Aim</div>
-      <div class="s">Arrange the phones in the room, then conduct one at a time.</div>
-    </a>
     <a class="card" href="./editor/">
-      <div class="ico">🎛️</div><div class="t">Control Room</div>
-      <div class="s">Drive it by hand — tempo, song, instruments.</div>
+      <div class="ico">🎹</div><div class="t">Song Editor</div>
+      <div class="s">Drop a MIDI, edit the piano roll, assign instruments.</div>
     </a>
     <a class="card" href="./stagepix/">
       <div class="ico">🎻</div><div class="t">Classic Stage</div>

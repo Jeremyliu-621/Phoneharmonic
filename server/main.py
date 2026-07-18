@@ -304,11 +304,15 @@ class App:
             self.engine.load_song(song, tracks)
             log.info("song loaded: %s (%d bars, %d parts)", song.name, len(song.bars), len(tracks))
             # Auto-assign instruments so each phone becomes one of the MIDI's parts.
+            # More phones than parts? Extras DOUBLE existing parts round-robin —
+            # like several players sharing one orchestra section (the engine routes
+            # a part to every phone assigned to it, so doubled phones play in unison
+            # and should stand close together).
             playable = [t for t in tracks if not t["is_drum"]]
             ready = [s for s in self.session.sections.values() if s.connected]
             for j, section in enumerate(ready):
-                if j < len(playable):
-                    section.instrument = playable[j]["instrument"]
+                if playable:
+                    section.instrument = playable[j % len(playable)]["instrument"]
                     c = self.hub.get(section.client_id)
                     if c:
                         await send_json(c.ws, {"t": P.SECTION_CONFIG, "section_id": section.section_id,

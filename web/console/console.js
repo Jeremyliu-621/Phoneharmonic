@@ -1,15 +1,17 @@
-// Maestro Console — the whole show on one workstation screen.
+// Maestro Console — the room IS the interface.
 //
-//   LEFT   the score: one piano-roll lane per instrument in the loaded song
-//   CENTER the live camera-wand (your hand conducts) with each phone connecting to it
-//   RIGHT  the live gesture read-out + wand state + what your last move did
-//   BOTTOM a live piano roll of every note sounding, scrolling under a playhead
+// CENTER  the playground: live camera-wand hub in the middle; each INSTRUMENT is
+//         a draggable card wired to the hub. Dragging a card tells the server
+//         where those phones really sit (stage.place, live); doubled phones (two
+//         phones, one instrument) share one card and move together. Tap a card
+//         to conduct just that instrument.
+// LEFT    the score: one lane per track, colour-keyed to the room cards.
+// RIGHT   live gesture bars + what your last move did + target + status.
+// BOTTOM  transport + a live piano roll of every note under a playhead.
 //
-// It connects once as `stage` (roster + sched.notes + engine.state, and it can
-// drive transport). The camera in the middle is the existing hand-tracking wand
-// (../cvwand/) embedded in an iframe — it opens its own wand connection, so the
-// wand sprite/gestures light up here via the roster + engine.state. When no phone
-// has joined, this screen is also the orchestra (plays the SECTION_ALL stream).
+// One ws connection as `stage` (roster/notes/engine state + transport). The
+// camera iframe (../cvwand/) opens its own wand connection. When no phone has
+// joined, this screen is also the orchestra (plays the SECTION_ALL stream).
 
 import { Conn } from "../shared/ws.js";
 import { Clock } from "../shared/clock.js";
@@ -20,101 +22,254 @@ const params = new URLSearchParams(location.search);
 const session = params.get("s") || "lol1";
 const el = (id) => document.getElementById(id);
 
-// scientific pitch -> midi (sched.notes carry e.g. "C4")
 const SEMI = { C: 0, "C#": 1, D: 2, "D#": 3, E: 4, F: 5, "F#": 6, G: 7, "G#": 8, A: 9, "A#": 10, B: 11 };
 const noteToMidi = (n) => { const m = /^([A-G]#?)(-?\d+)$/.exec(n || ""); return m ? (parseInt(m[2], 10) + 1) * 12 + SEMI[m[1]] : 60; };
-
 const NICE = { lower_imitation: "Lower imitation", contrary_motion: "Contrary motion", sustained: "Sustained chord",
   delayed: "Delayed echo", rhythmic_dense: "Rhythmic — busy", rhythmic: "Rhythmic — busy", rest: "Rest — silence" };
+const SPRITES = ["violin", "cello", "flute", "trumpet", "harp", "drums", "piano", "synth"];
 
-// section id -> stable colour (shared with the other stage views); drums grey.
-const PALETTE = ["#e7c583", "#7fd1ff", "#6fcf7f", "#e58a6a", "#c79bff", "#ffd76a", "#79d6c0"];
-function colorFor(section, drum) {
-  if (drum) return "#8a8378";
-  if (section === "all" || !section) return "#e7c583";
-  let h = 0; for (const c of section) h = (h * 31 + c.charCodeAt(0)) % PALETTE.length;
-  return PALETTE[h];
+// ── one neon accent per instrument, everywhere it appears ────────────────────
+const PALETTE = ["#ff6d5a", "#ffd166", "#6fe08b", "#c08bff", "#5aa9ff", "#5ee6d0", "#ff8fd0", "#e7c583"];
+const colorMap = new Map();          // instrument -> colour (assigned in first-seen order)
+function colorOf(instrument) {
+  if (!instrument) return "#e7c583";
+  if (!colorMap.has(instrument)) colorMap.set(instrument, PALETTE[colorMap.size % PALETTE.length]);
+  return colorMap.get(instrument);
 }
+const spriteFor = (inst) => (SPRITES.includes(inst) ? inst : "synth");
 
 let conn = null, clock = null, synth = null;
 let started = false, camStarted = false, audioReady = false;
-let sections = [];              // latest connected sections
-let readySections = 0;
-const notes = [];              // {at, dur, pitch, color} for the bottom roll
+let sections = [];                   // connected sections from the roster
+let groups = [];                     // [{key, instrument, members[], px, py, placed}]
+let aimedGroup = null;               // group key being conducted (null = everyone)
+let engineAimed = null;              // server's aimed section id
+let transport = null;                // engine.transport for the bar position
+const cardEls = new Map();           // group key -> card element
+const secGroup = new Map();          // section id -> group key (for note pulses)
+const seeded = new Set();            // group keys we've auto-fanned once
+const notes = [];                    // bottom-roll notes
 const seen = new Set();
-const rowEls = new Map();       // section id -> {row, dot} for note pulses
+const secInstrument = new Map();     // section id -> instrument (roll colours)
 let lastChoice = null;
+let dragging = null;                 // {key, moved, lastSend} during a card drag
 
-// ── phones (center list + dots overlay) ──────────────────────────────────────
-function dotX(s, i, n) {
-  // Placed phones sit by their real azimuth (-75°..+75° -> 6%..94%); unplaced
-  // ones fan out evenly so they never stack on top of each other.
-  if (s.placed) return 50 + Math.max(-75, Math.min(75, s.azimuth_deg)) / 75 * 44;
-  return n <= 1 ? 50 : 8 + 84 * (i / (n - 1));
+// ── room coordinates: px ∈ [-1,1], py ∈ [0,1], hub at (0, 0.5) = map centre ──
+function roomBox() { const r = el("room").getBoundingClientRect(); return r; }
+function toScreen(px, py, r = roomBox()) {
+  return { x: r.width * (0.5 + px * 0.44), y: r.height * (0.94 - py * 0.88) };
+}
+function fromScreen(sx, sy, r = roomBox()) {
+  return {
+    px: Math.max(-1, Math.min(1, (sx / r.width - 0.5) / 0.44)),
+    py: Math.max(0, Math.min(1, (0.94 - sy / r.height) / 0.88)),
+  };
+}
+// keep cards from landing on top of the camera hub: nudge radially out
+function nudgeOffHub(px, py) {
+  const dx = px, dy = (py - 0.5) * 2;               // roughly square-ish units
+  const d = Math.hypot(dx, dy);
+  if (d >= 0.42) return { px, py };
+  const f = 0.42 / (d || 1e-6);
+  return { px: Math.max(-1, Math.min(1, dx * f)), py: Math.max(0, Math.min(1, 0.5 + (dy * f) / 2)) };
 }
 
+// ── grouping: phones sharing an instrument = one card, dragged together ──────
+function rebuildGroups() {
+  const byInst = new Map();
+  secGroup.clear();
+  for (const s of sections) {
+    const key = s.instrument || s.id;
+    if (!byInst.has(key)) byInst.set(key, []);
+    byInst.get(key).push(s);
+    secGroup.set(s.id, key);
+    secInstrument.set(s.id, s.instrument);
+  }
+  groups = [...byInst.entries()].map(([key, members]) => {
+    const lead = members.find((m) => m.placed) || members[0];
+    return { key, instrument: members[0].instrument, members,
+             px: lead.px, py: lead.py, placed: members.some((m) => m.placed) };
+  });
+
+  // Fan brand-new groups around the hub so every card starts somewhere sensible,
+  // and push that placement so the server knows immediately. User drags to refine.
+  const fresh = groups.filter((g) => !g.placed && !seeded.has(g.key));
+  fresh.forEach((g) => {
+    const i = groups.indexOf(g), n = Math.max(4, groups.length);
+    const a = (i / n) * 2 * Math.PI;                 // 0 = top of the map, clockwise
+    g.px = 0.62 * Math.sin(a); g.py = 0.5 + 0.36 * Math.cos(a);
+    seeded.add(g.key);
+    sendPlace(g);
+  });
+}
+function sendPlace(g) {
+  for (const m of g.members) conn.send({ t: P.STAGE_PLACE, section_id: m.id, px: g.px, py: g.py });
+}
+
+// ── render: cards + links ────────────────────────────────────────────────────
+function upsertCards() {
+  for (const [key, node] of cardEls) {
+    if (!groups.some((g) => g.key === key)) { node.remove(); cardEls.delete(key); }
+  }
+  const r = roomBox();
+  groups.forEach((g) => {
+    let node = cardEls.get(g.key);
+    if (!node) {
+      node = document.createElement("div");
+      node.className = "card";
+      node.innerHTML = `<div class="box"><span class="xn" hidden></span><img alt=""><div class="nm"></div><div class="mem"></div></div>`;
+      el("room").appendChild(node);
+      cardEls.set(g.key, node);
+      attachDrag(node, g.key);
+    }
+    node.style.setProperty("--c", colorOf(g.instrument));
+    node.querySelector("img").src = `../assets/${spriteFor(g.instrument)}.png`;
+    node.querySelector(".nm").textContent = g.instrument;
+    const xn = node.querySelector(".xn");
+    xn.hidden = g.members.length < 2;
+    xn.textContent = "×" + g.members.length;
+    node.querySelector(".mem").innerHTML = g.members
+      .map((m) => `<span class="chip${m.ready ? "" : " wait"}">${m.id}</span>`).join("");
+    node.classList.toggle("ghost", !g.placed);
+    node.classList.toggle("dropped", !g.members.some((m) => m.ready));
+    node.classList.toggle("aimed", g.key === aimedGroup);
+    if (dragging?.key !== g.key) {
+      const p = toScreen(g.px, g.py, r);
+      node.style.left = p.x + "px";
+      node.style.top = p.y + "px";
+    }
+  });
+  drawLinks();
+}
+
+function drawLinks() {
+  const r = roomBox();
+  const hub = { x: r.width / 2, y: r.height / 2 };
+  let out = "";
+  groups.forEach((g) => {
+    const node = cardEls.get(g.key);
+    const p = dragging?.key === g.key && node
+      ? { x: parseFloat(node.style.left), y: parseFloat(node.style.top) }
+      : toScreen(g.px, g.py, r);
+    const c = colorOf(g.instrument);
+    const aimed = g.key === aimedGroup;
+    out += `<line x1="${hub.x}" y1="${hub.y}" x2="${p.x}" y2="${p.y}" stroke="${c}" stroke-opacity="${aimed ? 0.95 : 0.4}" stroke-width="${aimed ? 3 : 1.6}"/>`;
+    out += `<line class="flow" x1="${hub.x}" y1="${hub.y}" x2="${p.x}" y2="${p.y}" stroke="${c}" stroke-opacity="${aimed ? 1 : 0.75}" stroke-width="${aimed ? 4 : 2.6}"/>`;
+  });
+  el("links").innerHTML = out;
+}
+
+// ── drag + tap on cards ──────────────────────────────────────────────────────
+function attachDrag(node, key) {
+  node.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    node.setPointerCapture(e.pointerId);
+    dragging = { key, moved: 0, x0: e.clientX, y0: e.clientY, lastSend: 0 };
+  });
+  node.addEventListener("pointermove", (e) => {
+    if (!dragging || dragging.key !== key) return;
+    dragging.moved += Math.abs(e.clientX - dragging.x0) + Math.abs(e.clientY - dragging.y0);
+    dragging.x0 = e.clientX; dragging.y0 = e.clientY;
+    const r = roomBox();
+    const raw = fromScreen(e.clientX - r.left, e.clientY - r.top, r);
+    const pos = nudgeOffHub(raw.px, raw.py);
+    const g = groups.find((x) => x.key === key);
+    if (!g) return;
+    g.px = pos.px; g.py = pos.py; g.placed = true;
+    node.classList.remove("ghost");
+    const p = toScreen(g.px, g.py, r);
+    node.style.left = p.x + "px"; node.style.top = p.y + "px";
+    drawLinks();
+    const now = performance.now();                    // live placement, throttled
+    if (now - dragging.lastSend > 120) { dragging.lastSend = now; sendPlace(g); }
+  });
+  node.addEventListener("pointerup", () => {
+    if (!dragging || dragging.key !== key) return;
+    const wasTap = dragging.moved < 6;
+    const g = groups.find((x) => x.key === key);
+    dragging = null;
+    if (wasTap) setAim(aimedGroup === key ? null : key);
+    else if (g) sendPlace(g);                          // commit final spot
+  });
+}
+
+// ── aim: tap a card → conduct just that instrument ───────────────────────────
+function setAim(key) {
+  aimedGroup = key;
+  const g = key && groups.find((x) => x.key === key);
+  conn.send({ t: P.ADMIN_CMD, cmd: "aim", args: { section_id: g ? g.members[0].id : "all" } });
+  syncTarget();
+  upsertCards();
+}
+function syncTarget() {
+  const g = aimedGroup && groups.find((x) => x.key === aimedGroup);
+  el("tctl").hidden = !g;
+  if (g) {
+    el("targetwho").innerHTML = `<span class="sw" style="background:${colorOf(g.instrument)}"></span>${g.instrument}` +
+      (g.members.length > 1 ? ` <span style="color:#b98c6a;font-size:.7em">(${g.members.map((m) => m.id).join("+")})</span>` : "");
+    el("targethint").textContent = "Wand gestures now shape only this instrument.";
+    el("vol").value = Math.round((g.members[0].volume ?? 1) * 100);
+    const muted = g.members.every((m) => m.muted);
+    el("mute").textContent = muted ? "Unmute" : "Mute";
+    el("mute").classList.toggle("on", muted);
+  } else {
+    el("targetwho").textContent = "everyone";
+    el("targethint").textContent = "Tap a card in the room to conduct just that instrument.";
+  }
+}
+el("vol").addEventListener("input", (e) => {
+  const g = aimedGroup && groups.find((x) => x.key === aimedGroup);
+  if (!g) return;
+  const v = (+e.target.value) / 100;
+  g.members.forEach((m) => { m.volume = v; conn.send({ t: P.ADMIN_CMD, cmd: "volume", args: { section_id: m.id, volume: v } }); });
+});
+el("mute").addEventListener("click", () => {
+  const g = aimedGroup && groups.find((x) => x.key === aimedGroup);
+  if (!g) return;
+  const to = !g.members.every((m) => m.muted);
+  g.members.forEach((m) => { m.muted = to; conn.send({ t: P.ADMIN_CMD, cmd: "mute", args: { section_id: m.id, muted: to } }); });
+  syncTarget();
+});
+el("unaim").addEventListener("click", () => setAim(null));
+
+// ── roster ───────────────────────────────────────────────────────────────────
 function renderRoster(m) {
   sections = (m.sections || []).filter((s) => s.connected);
-  readySections = sections.filter((s) => s.ready).length;
   el("pcount").textContent = sections.length;
-
+  el("devcell").textContent = sections.length;
   const w = m.wand || {};
   el("wanddot").classList.toggle("ok", !!w.connected);
   el("wandvar").textContent = w.connected ? w.variant : "—";
-  wandText(!!w.connected, w.variant);
 
-  // clock spread across ready, synced phones
   const th = sections.filter((s) => s.ready && s.theta != null).map((s) => s.theta);
-  el("spread").textContent = th.length >= 2 ? (Math.max(...th) - Math.min(...th)).toFixed(0) + "ms"
-    : (readySections ? "sync…" : "laptop");
+  const sp = el("spread");
+  if (th.length >= 2) {
+    const v = Math.max(...th) - Math.min(...th);
+    sp.textContent = v.toFixed(0) + "ms";
+    sp.classList.toggle("good", v <= 30);
+  } else { sp.textContent = sections.length ? "…" : "solo"; sp.classList.remove("good"); }
 
-  // phone rows
-  const box = el("phones");
-  el("phonesempty").hidden = sections.length > 0;
-  rowEls.clear();
-  box.querySelectorAll(".prow").forEach((n) => n.remove());
-  sections.forEach((s) => {
-    const row = document.createElement("div");
-    row.className = "prow";
-    const col = colorFor(s.id, false);
-    const synced = s.ready && s.theta != null;
-    row.innerHTML =
-      `<span class="sw" style="background:${col}"></span>` +
-      `<span class="id">${s.id}</span>` +
-      `<span class="inst">${s.instrument}${s.muted ? ' <span class="mut">muted</span>' : ""}</span>` +
-      (s.connected
-        ? `<span class="sync${synced ? "" : " wait"}">${synced ? "● " + s.theta.toFixed(0) + "ms" : "○ waiting"}</span>`
-        : `<span class="off">● dropped</span>`);
-    box.appendChild(row);
-    rowEls.set(s.id, { row });
-  });
-
-  // dots overlaid on the camera
-  const dots = el("dots");
-  dots.innerHTML = "";
-  sections.forEach((s, i) => {
-    const d = document.createElement("div");
-    d.className = "pdot";
-    d.style.left = dotX(s, i, sections.length) + "%";
-    d.innerHTML = `<div class="c" style="background:${colorFor(s.id, false)}"></div><div class="t">${s.id}</div>`;
-    dots.appendChild(d);
-    rowEls.get(s.id).dot = d;
-  });
-
+  rebuildGroups();
+  // keep aim in sync if the aimed group vanished
+  if (aimedGroup && !groups.some((g) => g.key === aimedGroup)) { aimedGroup = null; syncTarget(); }
+  upsertCards();
+  el("roomqr").hidden = sections.length > 0 && el("roomqr").dataset.user !== "open";
+  el("roomhint").hidden = sections.length === 0;
   applyEngine(m.engine);
 }
 
-// pulse a phone's row + dot the instant one of its notes sounds
+// pulse card + link when a section's note sounds
 function pulse(section) {
-  const r = rowEls.get(section);
-  const targets = section === P.SECTION_ALL ? [...rowEls.values()] : (r ? [r] : []);
-  targets.forEach((t) => {
-    t.row.classList.add("hit"); t.dot && t.dot.classList.add("hit");
-    setTimeout(() => { t.row.classList.remove("hit"); t.dot && t.dot.classList.remove("hit"); }, 140);
+  const keys = section === P.SECTION_ALL ? [...cardEls.keys()] : [secGroup.get(section)].filter(Boolean);
+  keys.forEach((k) => {
+    const node = cardEls.get(k);
+    if (!node) return;
+    node.classList.add("hit");
+    clearTimeout(node._t); node._t = setTimeout(() => node.classList.remove("hit"), 130);
   });
 }
 
-// ── engine state: gesture bars, last action, tempo, now-playing ──────────────
+// ── engine state: gesture, action, lanes, transport ──────────────────────────
 let tempoDragging = false;
 el("tempo").addEventListener("pointerdown", () => (tempoDragging = true));
 el("tempo").addEventListener("pointerup", () => (tempoDragging = false));
@@ -122,10 +277,13 @@ el("tempo").addEventListener("pointerup", () => (tempoDragging = false));
 function bar(id, v, max) { el("f-" + id).style.width = Math.max(0, Math.min(1, v / max)) * 100 + "%"; }
 function applyEngine(eng) {
   if (!eng) return;
-  el("bpm").textContent = Math.round(eng.bpm);
-  if (!tempoDragging) el("tempo").value = Math.round(eng.bpm);
-  el("songname").textContent = eng.song || "";
-  renderLanes(eng.tracks || []);
+  const bpm = Math.round(eng.bpm);
+  el("bpmlbl").textContent = bpm; el("bpmcell").textContent = bpm; el("bpmval").textContent = bpm;
+  if (!tempoDragging) el("tempo").value = bpm;
+  el("songname").textContent = eng.song || "—";
+  el("barslbl").textContent = eng.bars ? eng.bars + " bars" : "";
+  if (eng.transport) transport = eng.transport;
+  engineAimed = eng.aimed || null;
 
   const g = eng.gesture;
   if (g) {
@@ -133,70 +291,65 @@ function applyEngine(eng) {
     el("v-size").textContent = (g.size ?? 0).toFixed(2); bar("size", g.size ?? 0, 1);
     el("v-vertical").textContent = (g.vertical ?? 0).toFixed(2); bar("vertical", Math.abs(g.vertical ?? 0), 1);
     el("v-rotation").textContent = (g.rotation ?? 0).toFixed(2); bar("rotation", g.rotation ?? 0, 1);
-    el("v-duration").textContent = (g.duration ?? 0).toFixed(1) + "s"; bar("duration", g.duration ?? 0, 3);
   }
 
   const label = eng.last_choice ? (NICE[eng.last_choice] || eng.last_choice) : "—";
-  el("nowplaying").innerHTML = `now playing <b>${label}</b>${eng.song ? ` · ${eng.song}` : ""}`;
+  el("nowplaying").innerHTML = eng.playing ? `now playing <b>${label}</b>` : "press ▶ to start";
   if (eng.last_choice && eng.last_choice !== lastChoice) {
     lastChoice = eng.last_choice;
     const oct = g && g.vertical > 0.6 ? '<span class="oct">⬆ octave up</span>'
       : (g && g.vertical < -0.6 ? '<span class="oct">⬇ octave down</span>' : "");
     el("what").innerHTML = label + oct;
-    flash(el("wandcard")); flash(el("what"));
   }
-}
-function flash(node) {
-  node.classList.add("live");
-  clearTimeout(node._t); node._t = setTimeout(() => node.classList.remove("live"), 1400);
+  renderLanes(eng.tracks || []);
 }
 
-// wand card text tracks the roster wand
-function wandText(connected, variant) {
-  el("wandst").textContent = connected ? "connected" : "not connected";
-  el("wandsub").textContent = connected
-    ? (variant === "cv" ? "webcam hand — pinch to grab" : variant === "sim" ? "phone motion — hold to grab" : "hardware wand")
-    : "enable the camera, or scan to conduct";
-}
-
-// ── left: score lanes (one mini piano roll per instrument) ───────────────────
+// ── left lanes ───────────────────────────────────────────────────────────────
 let laneSig = "";
 function renderLanes(tracks) {
   const playable = tracks.filter((t) => t.roll).slice(0, 12);
-  el("leftempty").hidden = playable.length > 0;
-  const sig = playable.map((t) => t.name + ":" + t.note_count).join("|");
-  if (sig === laneSig) return;                 // only rebuild when the song changes
+  el("leftempty").hidden = playable.length > 0 && playable[0].name !== "melody";
+  // who plays each instrument (chips linking lanes to room cards)
+  const who = new Map();
+  sections.forEach((s) => {
+    if (!who.has(s.instrument)) who.set(s.instrument, []);
+    who.get(s.instrument).push(s.id);
+  });
+  const sig = playable.map((t) => t.name + ":" + t.note_count).join("|") + "©" + [...who.keys()].join(",");
+  if (sig === laneSig) return;
   laneSig = sig;
   const host = el("lanes");
   host.innerHTML = "";
-  const bars = Math.max(1, ...playable.map((t) => (t.roll.length ? Math.max(...t.roll.map((r) => r[0])) + 1 : 1)));
+  const bars = Math.max(1, ...playable.map((t) => (t.roll.length ? Math.max(...t.roll.map((x) => x[0])) + 1 : 1)));
   playable.forEach((t) => {
+    const col = t.is_drum ? "#8a8378" : colorOf(t.instrument);
     const lane = document.createElement("div");
-    lane.className = "lane" + (t.is_melody ? " melody" : "");
-    lane.innerHTML = `<div class="lbl"><span>${t.instrument || t.name}</span><span class="n">${t.note_count}</span></div><canvas></canvas>`;
+    lane.className = "lane";
+    lane.style.borderLeftColor = col;
+    const players = (who.get(t.instrument) || []).join(" ");
+    lane.innerHTML = `<div class="lbl"><span class="nm" style="color:${col}">${t.instrument || t.name}</span>` +
+      (t.is_melody ? `<span class="star">⭐</span>` : "") +
+      `<span class="who">${players || "laptop"}</span></div><canvas></canvas>`;
     host.appendChild(lane);
-    drawLane(lane.querySelector("canvas"), t, bars);
+    drawLane(lane.querySelector("canvas"), t, bars, col);
   });
 }
-function drawLane(canvas, track, bars) {
+function drawLane(canvas, track, bars, col) {
   const dpr = window.devicePixelRatio || 1;
   const W = (canvas.width = canvas.clientWidth * dpr);
-  const H = (canvas.height = 34 * dpr);
+  const H = (canvas.height = 30 * dpr);
   const ctx = canvas.getContext("2d");
-  const total = bars * 16;
-  const LO = 36, HI = 84;
-  const col = track.is_drum ? "#8a8378" : (track.is_melody ? "#ffe3a3" : "#e7c583");
+  const total = bars * 16, LO = 36, HI = 84;
   ctx.fillStyle = col;
   for (const [b, on, dur, pitch] of track.roll) {
     const x = ((b * 16 + on) / total) * W;
     const w = Math.max(1.2 * dpr, (dur / total) * W);
     const y = H - ((Math.max(LO, Math.min(HI, pitch)) - LO) / (HI - LO)) * (H - 4 * dpr) - 2 * dpr;
-    ctx.fillRect(x, y - 1.4 * dpr, w, 2.8 * dpr);
+    ctx.fillRect(x, y - 1.3 * dpr, w, 2.6 * dpr);
   }
 }
-window.addEventListener("resize", () => { laneSig = ""; });   // force lane redraw at new width
 
-// ── bottom: live scrolling piano roll ────────────────────────────────────────
+// ── bottom roll ──────────────────────────────────────────────────────────────
 const WINDOW_MS = 4200, FUTURE_MS = 1500, RLO = 36, RHI = 96;
 function drawRoll() {
   const canvas = el("rollcanvas");
@@ -225,18 +378,27 @@ function drawRoll() {
   ctx.globalAlpha = 1;
   requestAnimationFrame(drawRoll);
 }
-
 function ingest(e) {
   if (seen.has(e.id)) return;
   seen.add(e.id);
   if (seen.size > 4000) seen.clear();
-  notes.push({ at: e.at, dur: e.dur || 200, pitch: noteToMidi(e.note), color: colorFor(e.section, e.art === "drum") });
-  // pulse the phone at note time (on the synced clock)
+  const col = e.art === "drum" ? "#8a8378"
+    : (e.section === P.SECTION_ALL ? "#e7c583" : colorOf(secInstrument.get(e.section)));
+  notes.push({ at: e.at, dur: e.dur || 200, pitch: noteToMidi(e.note), color: col });
   const delay = clock && clock.theta !== null ? Math.max(0, Math.min(1500, e.at - clock.serverNow())) : 0;
   setTimeout(() => pulse(e.section), delay);
 }
 
-// ── audio (this screen is the orchestra when no phone has joined) ─────────────
+// bar position ticker (from the engine transport, on the synced clock)
+setInterval(() => {
+  if (!transport || !transport.playing || !clock || clock.theta === null) { el("barpos").textContent = "–"; return; }
+  const t = clock.serverNow() - transport.anchor;
+  if (t < 0 || !transport.bar_ms || !transport.n_bars) { el("barpos").textContent = "–"; return; }
+  const b = Math.floor(t / transport.bar_ms) % transport.n_bars;
+  el("barpos").textContent = `${b + 1}/${transport.n_bars}`;
+}, 200);
+
+// ── audio ────────────────────────────────────────────────────────────────────
 async function ensureAudio() {
   if (audioReady) return;
   try { await synth.unlock(); clock.attachAudio(synth.ctx); audioReady = true; }
@@ -252,14 +414,17 @@ conn.on(P.CLOCK_PONG, (m) => clock.handlePong(m));
 conn.on(P.ROSTER, renderRoster);
 conn.on(P.ENGINE_STATE, applyEngine);
 conn.on(P.SCHED_NOTES, (m) => {
+  let readyCount = sections.filter((s) => s.ready).length;
   for (const e of m.events) {
     ingest(e);
-    if (started && readySections === 0 && e.section === P.SECTION_ALL) synth.schedule(e);
+    if (started && readyCount === 0 && e.section === P.SECTION_ALL) synth.schedule(e);
   }
 });
 conn.on(P.SCHED_CANCEL, (m) => { if (m.allnotesoff) synth.panic(); });
 
 conn.onOpen((welcome) => {
+  el("conndot").classList.add("ok");
+  el("connlbl").textContent = "connected";
   const cfg = welcome.config || {};
   const join = cfg.wand_url || cfg.join_url;
   if (join && window.qrcode) {
@@ -267,8 +432,8 @@ conn.onOpen((welcome) => {
     el("qr").innerHTML = qr.createSvgTag({ cellSize: 5, margin: 1, scalable: true });
   }
 });
+conn.onClose(() => { el("conndot").classList.remove("ok"); el("connlbl").textContent = "reconnecting"; });
 
-// transport
 el("start").addEventListener("click", async () => {
   await ensureAudio();
   started = true;
@@ -277,11 +442,11 @@ el("start").addEventListener("click", async () => {
 el("stop").addEventListener("click", () => conn.send({ t: P.ADMIN_CMD, cmd: "stop" }));
 el("panic").addEventListener("click", () => conn.send({ t: P.ADMIN_CMD, cmd: "allnotesoff" }));
 el("tempo").addEventListener("input", (e) => {
-  el("bpm").textContent = e.target.value;
+  el("bpmval").textContent = e.target.value;
   conn.send({ t: P.ADMIN_CMD, cmd: "tempo", args: { bpm: +e.target.value } });
 });
 
-// camera wand — load the iframe only when asked (MediaPipe is heavy)
+// camera hub — MediaPipe is heavy, load only when asked
 el("camstart").addEventListener("click", async () => {
   if (!camStarted) { el("camframe").src = `../cvwand/?s=${encodeURIComponent(session)}`; camStarted = true; }
   el("camstart").hidden = true;
@@ -289,9 +454,16 @@ el("camstart").addEventListener("click", async () => {
   if (!started) { started = true; conn.send({ t: P.ADMIN_CMD, cmd: "start" }); }
 });
 
-// join QR popover
-el("joinbtn").addEventListener("click", () => { el("qrpop").hidden = !el("qrpop").hidden; });
+// header Join button re-opens the QR card even with phones present
+el("joinbtn").addEventListener("click", () => {
+  const q = el("roomqr");
+  const show = q.hidden;
+  q.hidden = !show;
+  q.dataset.user = show ? "open" : "";
+});
+
+window.addEventListener("resize", () => upsertCards());
 
 conn.connect();
-clock.start();                 // begin pinging immediately so the roll has a clock
+clock.start();
 requestAnimationFrame(drawRoll);

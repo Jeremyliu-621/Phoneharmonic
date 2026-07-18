@@ -10,16 +10,21 @@ from dataclasses import dataclass, field
 
 from engine_api import SectionInfo
 
-# The conductor stands just below the map's front edge, looking "up" into the
-# stage. Placing this slightly off the bottom edge keeps every phone in front,
-# so azimuths stay within a sane ~±75° fan instead of wrapping past ±90°.
-_CONDUCTOR_Y = -0.25
+# The laptop (webcam + conductor) is the HUB in the middle of the room map, so
+# phones can sit anywhere around it and azimuths span the full circle:
+# 0 = straight ahead (top of the map), +90 = right, ±180 = behind, -90 = left.
+_HUB_X, _HUB_Y = 0.0, 0.5
 
 
 def azimuth_from_xy(px: float, py: float) -> float:
-    """Angle (deg) from the conductor's forward axis to a phone at (px, py).
-    0 = straight ahead, negative = to the conductor's left, positive = right."""
-    return math.degrees(math.atan2(px, py - _CONDUCTOR_Y))
+    """Angle (deg) from the hub's forward axis to a phone at (px, py)."""
+    return math.degrees(math.atan2(px - _HUB_X, py - _HUB_Y))
+
+
+def ang_dist(a: float, b: float) -> float:
+    """Circular distance between two angles in degrees (0..180)."""
+    d = abs(a - b) % 360.0
+    return 360.0 - d if d > 180.0 else d
 
 # Distinct instruments handed out as phones join, so no two sound identical.
 INSTRUMENT_ROTATION = ["violin", "cello", "flute", "clarinet", "viola", "piano", "bass", "bell"]
@@ -32,8 +37,8 @@ class Section:
     instrument: str = "synth"
     azimuth_deg: float = 0.0      # angle from the conductor's forward axis (- left, + right)
     px: float = 0.0              # top-down map position, normalized: -1 (far left) .. +1 (far right)
-    py: float = 0.5             #   0 = next to the conductor .. 1 = back of the stage
-    placed: bool = False         # True once the user has dragged it onto the seating map
+    py: float = 0.9             #   0 = front edge .. 1 = back of the room (hub sits at 0.5)
+    placed: bool = False         # True once the user has dragged it onto the room map
     connected: bool = True
     ready: bool = False
     volume: float = 1.0
@@ -81,14 +86,14 @@ class SessionState:
         return sec
 
     def nearest_to_yaw(self, yaw_deg: float, max_gap_deg: float = 35.0) -> str | None:
-        """Which placed section is the wand pointing at? Nearest azimuth within
-        max_gap_deg (else None = pointing at empty space). This is the bridge from
-        manual placement to real yaw pointing when the wand arrives."""
+        """Which placed section is the wand pointing at? Nearest azimuth (circular,
+        so ±180 wraps) within max_gap_deg, else None = pointing at empty space.
+        This is the bridge from manual placement to real yaw pointing."""
         placed = [s for s in self.sections.values() if s.connected and s.placed]
         if not placed:
             return None
-        best = min(placed, key=lambda s: abs(s.azimuth_deg - yaw_deg))
-        return best.section_id if abs(best.azimuth_deg - yaw_deg) <= max_gap_deg else None
+        best = min(placed, key=lambda s: ang_dist(s.azimuth_deg, yaw_deg))
+        return best.section_id if ang_dist(best.azimuth_deg, yaw_deg) <= max_gap_deg else None
 
     def engine_sections(self) -> list[SectionInfo]:
         return [

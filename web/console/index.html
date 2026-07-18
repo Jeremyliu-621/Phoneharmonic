@@ -6,224 +6,295 @@
   <meta name="theme-color" content="#0c0608">
   <title>Wand Maestro — Console</title>
   <style>
-    /* One warm design language: deep crimson + antique gold, display serif for
-       titles, clean sans for the console chrome, mono for numbers. The whole
-       screen is a workstation: score on the left, the live camera-wand in the
-       middle with each phone connecting to it, gesture/wand on the right, and a
-       live piano roll along the bottom. */
+    /* ── Maestro Console: the room IS the interface. ──────────────────────────
+       A top-down playground fills the screen: the live camera (your hand = the
+       wand) is the hub in the middle; every phone is a draggable card wired to
+       the hub with a glowing link. Drag cards to match the real room; tap one
+       to conduct just that instrument. Score left, gesture right, transport +
+       live piano roll along the bottom. Warm crimson/gold chrome, one neon
+       accent colour per instrument everywhere it appears. */
     :root {
       --serif: "Cinzel", "Bodoni MT", "Didot", "Playfair Display", Georgia, serif;
       --sans: "Segoe UI", system-ui, -apple-system, sans-serif;
       --mono: ui-monospace, "Cascadia Code", "Courier New", monospace;
       --gold: #e7c583; --gold-hi: #ffe3a3; --gold-dim: #b9903f;
-      --wine: #2a0d12; --wine-2: #1b0709; --cream: #f6e7c9; --ink: #140a0c;
-      --line: rgba(183,144,63,.28);
+      --cream: #f6e7c9; --panel: #170a0e; --line: rgba(183,144,63,.25);
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body { height: 100%; }
     body { font-family: var(--sans); color: var(--cream); overflow: hidden;
-      background: radial-gradient(130% 100% at 50% -10%, #34101a, #0a0507 60%) fixed;
-      display: grid; grid-template-rows: auto 1fr; height: 100vh; }
+      background: radial-gradient(130% 100% at 50% -10%, #300f18, #090406 62%) fixed;
+      display: grid; grid-template-rows: 46px 1fr 132px; height: 100vh; }
+    img { image-rendering: pixelated; user-select: none; -webkit-user-drag: none; }
 
-    /* ── header / transport ── */
-    #top { display: flex; align-items: center; gap: 1.1rem; padding: .55rem 1rem;
-      border-bottom: 1px solid var(--line); background: linear-gradient(#1c0a0eaa, #12070900); }
-    #top h1 { font: 700 1.15rem/1 var(--serif); letter-spacing: .12em; color: var(--gold-hi);
+    /* ═══ header: identity + status. Nothing to operate here but Join. ═══ */
+    #top { display: flex; align-items: center; gap: 1rem; padding: 0 .9rem;
+      border-bottom: 1px solid var(--line); background: linear-gradient(#1c0a0eb0, #12070900); }
+    #top h1 { font: 700 1.02rem/1 var(--serif); letter-spacing: .12em; color: var(--gold-hi);
       text-shadow: 0 0 10px rgba(255,178,76,.4); white-space: nowrap; }
-    #top .grp { display: flex; align-items: center; gap: .45rem; }
-    #top .sp { flex: 1; }
-    .tbtn { cursor: pointer; font: 700 .82rem var(--sans); color: #24120a; border: 0; border-radius: 5px;
-      padding: .42rem .8rem; background: linear-gradient(#ffe3a3, #e0b45c);
-      box-shadow: inset 0 -2px 0 rgba(120,70,10,.35); }
-    .tbtn.stop { background: linear-gradient(#f0a0a0, #d76a6a); color: #3a0d0d; }
-    .tbtn.warn { background: linear-gradient(#f2c983, #e0a54a); }
-    .tbtn.ghost { background: transparent; color: var(--gold); border: 1px solid var(--gold-dim);
-      box-shadow: none; text-decoration: none; }
-    .tbtn.ghost:hover { color: var(--gold-hi); border-color: var(--gold); }
-    #tempo { accent-color: var(--gold); width: 108px; }
-    .kv { font: .74rem/1 var(--sans); color: #c9a06a; }
+    .kv { font: .74rem/1.1 var(--sans); color: #c9a06a; white-space: nowrap; }
     .kv b { font-family: var(--mono); color: var(--cream); font-weight: 400; }
     .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #b5484d;
-      box-shadow: 0 0 5px rgba(181,72,77,.7); vertical-align: middle; }
+      box-shadow: 0 0 5px rgba(181,72,77,.7); vertical-align: -1px; }
     .dot.ok { background: #6cc98a; box-shadow: 0 0 6px rgba(108,201,138,.8); }
+    #top .sp { flex: 1; }
+    .tbtn { cursor: pointer; font: 700 .8rem var(--sans); color: #24120a; border: 0; border-radius: 5px;
+      padding: .38rem .8rem; background: linear-gradient(#ffe3a3, #e0b45c);
+      box-shadow: inset 0 -2px 0 rgba(120,70,10,.35); text-decoration: none; }
+    .tbtn.ghost { background: transparent; color: var(--gold); border: 1px solid var(--gold-dim); box-shadow: none; }
+    .tbtn.ghost:hover { color: var(--gold-hi); border-color: var(--gold); }
 
-    /* ── main 3-column grid + bottom roll ── */
-    #main { display: grid; grid-template-columns: 250px 1fr 300px; grid-template-rows: 1fr 122px;
-      grid-template-areas: "left center right" "roll roll roll"; min-height: 0; }
-    .col { min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
-    #left { grid-area: left; border-right: 1px solid var(--line); }
-    #center { grid-area: center; }
-    #right { grid-area: right; border-left: 1px solid var(--line); }
-    #rollwrap { grid-area: roll; border-top: 1px solid var(--line); position: relative;
-      background: linear-gradient(180deg, #0e0709, #0a0506); }
-
-    .panel-h { font: 700 .68rem var(--sans); letter-spacing: .16em; text-transform: uppercase;
-      color: var(--gold-dim); padding: .55rem .8rem .4rem; display: flex; justify-content: space-between; }
+    /* ═══ main: score | playground | gesture ═══ */
+    #main { display: grid; grid-template-columns: 232px 1fr 268px; min-height: 0; }
+    .side { min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+    #leftcol { border-right: 1px solid var(--line); }
+    #rightcol { border-left: 1px solid var(--line); }
+    .ph { font: 700 .64rem var(--sans); letter-spacing: .16em; text-transform: uppercase;
+      color: var(--gold-dim); padding: .55rem .75rem .35rem; display: flex; justify-content: space-between;
+      align-items: baseline; flex: none; }
+    .ph .sub { font: .62rem var(--mono); text-transform: none; letter-spacing: 0; color: #8a6a4a; }
     .scroll { overflow-y: auto; flex: 1; min-height: 0; }
     .scroll::-webkit-scrollbar { width: 8px; }
     .scroll::-webkit-scrollbar-thumb { background: #3a1720; border-radius: 4px; }
 
-    /* ── left: score lanes ── */
-    .lane { padding: .1rem .5rem .3rem; }
-    .lane .lbl { font: .68rem var(--mono); color: var(--gold); display: flex; justify-content: space-between;
-      padding: 2px 2px 1px; }
-    .lane .lbl .n { color: #c9a06a; }
-    .lane.melody .lbl { color: var(--gold-hi); }
-    .lane canvas { width: 100%; height: 34px; display: block; border-radius: 3px;
-      background: #140a0d; border: 1px solid rgba(74,37,48,.6); }
-    #leftempty { padding: 1rem .8rem; color: var(--gold-dim); font-size: .82rem; line-height: 1.5; }
+    /* left: track lanes, colour-keyed to the room cards */
+    .lane { margin: 0 .5rem .45rem; padding: .3rem .45rem .4rem; border-radius: 8px;
+      background: #130a0d; border: 1px solid rgba(74,37,48,.55); border-left-width: 3px; }
+    .lane .lbl { display: flex; align-items: baseline; gap: .4rem; font: .72rem var(--sans); margin-bottom: 3px; }
+    .lane .lbl .nm { color: var(--cream); text-transform: capitalize; font-weight: 600; }
+    .lane .lbl .who { font: .6rem var(--mono); color: #8a6a4a; margin-left: auto; }
+    .lane .lbl .star { font-size: .62rem; }
+    .lane canvas { width: 100%; height: 30px; display: block; }
+    #leftempty { padding: .9rem .8rem; color: var(--gold-dim); font-size: .8rem; line-height: 1.55; }
+    #leftempty a { color: var(--gold); }
 
-    /* ── center: camera + phones ── */
-    #cambox { position: relative; margin: .5rem .6rem 0; border-radius: 8px; overflow: hidden;
-      border: 1px solid var(--gold-dim); background: #000; flex: 3 1 0; min-height: 170px; }
-    #center .scroll#phones { flex: 2 1 0; }
+    /* ═══ the playground ═══ */
+    #room { position: relative; margin: .6rem; border-radius: 14px; overflow: hidden; touch-action: none;
+      border: 2px solid #3d1b26; box-shadow: inset 0 0 0 1px rgba(183,144,63,.18), inset 0 0 60px rgba(0,0,0,.55);
+      background:
+        radial-gradient(90% 80% at 50% 50%, rgba(231,197,131,.05), transparent 65%),
+        repeating-linear-gradient(0deg, rgba(74,37,48,.28) 0 1px, transparent 1px 42px),
+        repeating-linear-gradient(90deg, rgba(74,37,48,.28) 0 1px, transparent 1px 42px),
+        linear-gradient(#120a0d, #0b0608); }
+    #links { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+    #links line { stroke-linecap: round; }
+    #links .flow { stroke-dasharray: 3 9; animation: flow 1.1s linear infinite; }
+    @keyframes flow { to { stroke-dashoffset: -12; } }
+
+    /* the hub: live camera in the middle of the room */
+    #hub { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+      width: clamp(200px, 30%, 320px); z-index: 5; }
+    #cambox { position: relative; aspect-ratio: 4/3; border-radius: 10px; overflow: hidden;
+      border: 2px solid var(--gold-dim); background: #000;
+      box-shadow: 0 0 22px rgba(231,197,131,.16), 0 8px 30px rgba(0,0,0,.6); }
     #camframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
-    #camstart { position: absolute; inset: 0; display: flex; flex-direction: column; gap: .5rem;
-      align-items: center; justify-content: center; cursor: pointer; text-align: center;
-      background: radial-gradient(ellipse at 50% 40%, #3a1016ee, #0c0608f5); z-index: 3; }
-    #camstart .big { font: 700 1.1rem var(--serif); color: var(--gold-hi); letter-spacing: .05em; }
-    #camstart .sub { font-size: .78rem; color: #d8b98a; max-width: 24ch; line-height: 1.4; }
-    #camstart .go { margin-top: .3rem; padding: .5rem 1.1rem; border-radius: 6px; color: #24120a;
-      font: 700 .9rem var(--serif); background: linear-gradient(#ffe3a3, #e0b45c); }
-    #dots { position: absolute; left: 0; right: 0; bottom: 4px; height: 42px; z-index: 2; pointer-events: none; }
-    .pdot { position: absolute; bottom: 0; transform: translateX(-50%); text-align: center; transition: transform .12s; }
-    .pdot .c { width: 15px; height: 15px; border-radius: 50%; margin: 0 auto; border: 2px solid #0a0506;
-      box-shadow: 0 0 0 1px rgba(0,0,0,.6); }
-    .pdot .t { font: .58rem var(--mono); color: var(--cream); text-shadow: 0 1px 2px #000; margin-top: 1px; }
-    .pdot.hit { transform: translateX(-50%) translateY(-6px) scale(1.25); }
+    #camstart { position: absolute; inset: 0; z-index: 3; display: flex; flex-direction: column; gap: .3rem;
+      align-items: center; justify-content: center; cursor: pointer; text-align: center; padding: .5rem;
+      background: radial-gradient(ellipse at 50% 40%, #3a1016f0, #0c0608f7); }
+    #camstart .big { font: 700 .92rem var(--serif); color: var(--gold-hi); letter-spacing: .04em; }
+    #camstart .go { margin-top: .35rem; padding: .4rem .95rem; border-radius: 6px; color: #24120a;
+      font: 700 .8rem var(--serif); background: linear-gradient(#ffe3a3, #e0b45c); }
+    #camstart .sub { font-size: .68rem; color: #d8b98a; }
+    #hublbl { text-align: center; margin-top: 5px; font: 700 .6rem var(--mono); letter-spacing: .14em;
+      color: var(--gold-dim); }
+    #hublbl b { color: var(--gold); }
+    #campop { position: absolute; right: 5px; top: 5px; z-index: 4; color: var(--gold-hi); font-size: .85rem;
+      text-decoration: none; text-shadow: 0 1px 3px #000; opacity: .7; }
+    #campop:hover { opacity: 1; }
 
-    #phones { }
-    .prow { display: flex; align-items: center; gap: .5rem; padding: .38rem .7rem;
-      border-bottom: 1px solid rgba(74,37,48,.5); font-size: .82rem; }
-    .prow .sw { width: 10px; height: 10px; border-radius: 3px; flex: none; }
-    .prow .id { font-family: var(--mono); color: var(--gold); width: 2.2em; }
-    .prow .inst { flex: 1; color: var(--cream); text-transform: capitalize; }
-    .prow.hit { background: rgba(231,197,131,.10); }
-    .prow .sync { font: .68rem var(--mono); color: #6cc98a; }
-    .prow .sync.wait { color: #d79a3d; }
-    .prow .off { color: #b5484d; }
-    .prow .mut { color: #b98c6a; font-size: .72rem; }
-    #phonesempty { padding: .8rem .7rem; color: var(--gold-dim); font-size: .8rem; line-height: 1.5; }
+    /* instrument cards (one per instrument; doubled phones share a card) */
+    .card { position: absolute; transform: translate(-50%, -50%); z-index: 6; width: 86px;
+      cursor: grab; user-select: none; touch-action: none; text-align: center;
+      transition: filter .15s; }
+    .card:active { cursor: grabbing; }
+    .card .box { position: relative; border-radius: 10px; padding: 6px 4px 4px; background: #14090cdd;
+      border: 2px solid var(--c, var(--gold-dim));
+      box-shadow: 0 0 12px color-mix(in srgb, var(--c, #b9903f) 32%, transparent), 0 5px 16px rgba(0,0,0,.55);
+      transition: transform .1s, box-shadow .15s; }
+    .card img { width: 34px; height: 34px; object-fit: contain; }
+    .card .nm { font: 700 .62rem var(--sans); color: var(--cream); text-transform: capitalize;
+      letter-spacing: .03em; margin-top: 1px; }
+    .card .mem { display: flex; justify-content: center; gap: 3px; margin-top: 3px; flex-wrap: wrap; }
+    .card .chip { font: .55rem var(--mono); padding: 0 4px; border-radius: 6px; color: #0d0709;
+      background: var(--c, var(--gold-dim)); opacity: .92; }
+    .card .chip.wait { opacity: .45; }
+    .card .xn { position: absolute; top: -7px; right: -7px; min-width: 18px; height: 18px; border-radius: 9px;
+      background: var(--c, var(--gold-dim)); color: #10080a; font: 800 .62rem/18px var(--sans); padding: 0 4px;
+      box-shadow: 0 0 0 2px #10080a; }
+    .card.hit .box { transform: scale(1.07); box-shadow: 0 0 20px var(--c, #e7c583), 0 5px 16px rgba(0,0,0,.55); }
+    .card.aimed .box { border-color: #fff; box-shadow: 0 0 0 3px color-mix(in srgb, var(--c, #e7c583) 55%, transparent),
+      0 0 26px var(--c, #e7c583); }
+    .card.aimed .nm { color: #fff; }
+    .card.ghost .box { border-style: dashed; opacity: .8; }
+    .card.dropped { filter: grayscale(.75) brightness(.6); }
 
-    /* ── right: gesture + wand ── */
-    #right .body { padding: .3rem .8rem .8rem; overflow-y: auto; }
-    .wandcard { display: flex; align-items: center; gap: .55rem; padding: .5rem .1rem .7rem;
-      border-bottom: 1px solid var(--line); margin-bottom: .6rem; }
-    .wandcard .ico { font-size: 1.5rem; filter: grayscale(1) opacity(.5); transition: filter .2s, transform .2s; }
-    .wandcard.live .ico { filter: none; transform: scale(1.08); }
-    .wandcard .st b { color: var(--gold-hi); } .wandcard .st { font-size: .82rem; color: #c9a06a; }
-    .gbar { margin: .5rem 0; }
-    .gbar .lbl { display: flex; justify-content: space-between; font: .72rem var(--sans); color: #c9a06a; margin-bottom: 3px; }
+    /* in-room hints */
+    #roomqr { position: absolute; left: 50%; top: 76%; transform: translate(-50%, -50%); z-index: 7;
+      text-align: center; padding: .7rem .8rem; border-radius: 10px; background: #190a0ef0;
+      border: 1px solid var(--gold-dim); box-shadow: 0 8px 26px rgba(0,0,0,.55); }
+    #roomqr .lbl { font: 700 .66rem var(--serif); letter-spacing: .14em; color: var(--gold-hi); margin-bottom: .4rem; }
+    #roomqr #qr { width: 118px; height: 118px; background: #fdf6e6; padding: 5px; border-radius: 4px; margin: 0 auto; }
+    #roomqr #qr svg { width: 100%; height: 100%; display: block; }
+    #roomqr .sub { margin-top: .4rem; font-size: .64rem; color: #d8b98a; max-width: 17ch; }
+    #roomhint { position: absolute; left: 12px; bottom: 10px; z-index: 7; font: .68rem var(--sans);
+      color: #c9a06a; background: #14090cd8; border: 1px solid rgba(74,37,48,.7); border-radius: 8px;
+      padding: .35rem .6rem; pointer-events: none; max-width: 300px; line-height: 1.45; }
+    #roomhint b { color: var(--gold); }
+
+    /* ═══ right: gesture + target + status ═══ */
+    #rightcol .body { padding: .25rem .75rem .6rem; overflow-y: auto; }
+    .gbar { margin: .42rem 0; }
+    .gbar .lbl { display: flex; justify-content: space-between; font: .7rem var(--sans); color: #c9a06a; margin-bottom: 2px; }
     .gbar .lbl b { font-family: var(--mono); color: var(--cream); font-weight: 400; }
-    .gbar .track { height: 8px; border-radius: 4px; background: #200d12; overflow: hidden;
+    .gbar .track { height: 7px; border-radius: 4px; background: #200d12; overflow: hidden;
       border: 1px solid rgba(74,37,48,.7); }
     .gbar .fill { height: 100%; width: 0; border-radius: 4px; transition: width .18s ease-out;
       background: linear-gradient(90deg, #b9903f, #ffe3a3); }
     .gbar.vert .fill { background: linear-gradient(90deg, #7fd1ff, #ffe3a3); }
-    #action { margin-top: .8rem; padding: .7rem .6rem; border-radius: 8px; text-align: center;
+    #action { margin-top: .55rem; padding: .55rem .5rem; border-radius: 9px; text-align: center;
       border: 1px solid var(--line); background: rgba(42,13,18,.5); }
-    #action .did { font: .66rem var(--sans); letter-spacing: .14em; text-transform: uppercase; color: var(--gold-dim); }
-    #action .what { font: 700 1.15rem var(--serif); color: var(--gold-hi); margin-top: .2rem;
-      text-shadow: 0 0 12px rgba(255,178,76,.4); transition: opacity .2s; }
-    #action .oct { display: block; font-size: .8rem; color: #7fd1ff; margin-top: .1rem; }
+    #action .did { font: .6rem var(--sans); letter-spacing: .14em; text-transform: uppercase; color: var(--gold-dim); }
+    #action .what { font: 700 1.02rem var(--serif); color: var(--gold-hi); margin-top: .15rem;
+      text-shadow: 0 0 12px rgba(255,178,76,.4); min-height: 1.2em; }
+    #action .oct { display: block; font-size: .74rem; color: #7fd1ff; }
 
-    /* ── bottom roll ── */
+    #target { margin: .6rem 0 0; padding: .55rem .6rem .65rem; border-radius: 9px;
+      border: 1px solid var(--line); background: rgba(42,13,18,.35); }
+    #target .who { font: 700 .95rem var(--serif); letter-spacing: .03em; color: var(--gold-hi);
+      text-transform: capitalize; }
+    #target .who .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; }
+    #target .hint { font-size: .68rem; color: #b98c6a; line-height: 1.45; margin-top: .2rem; }
+    #tctl { display: flex; align-items: center; gap: .5rem; margin-top: .5rem; }
+    #tctl label { display: flex; align-items: center; gap: .4rem; flex: 1; font-size: .72rem; color: #c9a06a; }
+    #tctl input[type=range] { flex: 1; accent-color: var(--gold); min-width: 0; }
+    .sbtn { font: 700 .72rem var(--sans); color: var(--cream); background: #230f14; cursor: pointer;
+      border: 1px solid var(--gold-dim); border-radius: 6px; padding: .3rem .6rem; }
+    .sbtn:hover { color: var(--gold-hi); border-color: var(--gold); }
+    .sbtn.on { background: #5a1c24; border-color: var(--gold); color: var(--gold-hi); }
+
+    #status { margin-top: .6rem; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: .4rem; }
+    #status .cell { padding: .4rem .3rem; border-radius: 8px; border: 1px solid var(--line);
+      background: rgba(23,10,14,.6); text-align: center; }
+    #status .cell .k { font: .56rem var(--sans); letter-spacing: .1em; text-transform: uppercase; color: var(--gold-dim); }
+    #status .cell .v { font: .82rem var(--mono); color: var(--cream); margin-top: 2px; }
+    #status .cell .v.good { color: #6cc98a; }
+
+    /* ═══ bottom: transport + live roll ═══ */
+    #bottom { display: flex; align-items: stretch; gap: .6rem; padding: .5rem .7rem .6rem;
+      border-top: 1px solid var(--line); background: linear-gradient(180deg, #0e0709, #0a0506); }
+    #transport { display: flex; flex-direction: column; justify-content: center; gap: .45rem; flex: none; width: 250px; }
+    #transport .row { display: flex; align-items: center; gap: .45rem; }
+    .pbtn { width: 40px; height: 34px; border-radius: 7px; border: 0; cursor: pointer; font-size: .95rem;
+      color: #24120a; background: linear-gradient(#ffe3a3, #e0b45c); box-shadow: inset 0 -2px 0 rgba(120,70,10,.35); }
+    .pbtn.stop { background: linear-gradient(#f0a0a0, #d76a6a); color: #3a0d0d; }
+    .pbtn.warn { background: linear-gradient(#f2c983, #e0a54a); width: 34px; }
+    #pos { font: .72rem var(--mono); color: #c9a06a; margin-left: auto; }
+    #pos b { color: var(--cream); font-weight: 400; }
+    #transport input[type=range] { flex: 1; accent-color: var(--gold); }
+    #rollwrap { position: relative; flex: 1; border-radius: 8px; overflow: hidden;
+      border: 1px solid rgba(74,37,48,.6); background: #0d0709; }
     #rollcanvas { width: 100%; height: 100%; display: block; }
-    #nowplaying { position: absolute; left: 12px; top: 6px; font: 600 .78rem var(--sans); color: #c9a06a;
+    #nowplaying { position: absolute; left: 10px; top: 5px; font: 600 .72rem var(--sans); color: #c9a06a;
       text-shadow: 0 1px 3px #000; pointer-events: none; }
     #nowplaying b { color: var(--gold-hi); }
-    #rolltag { position: absolute; right: 12px; top: 6px; font: 700 .62rem var(--mono); color: var(--gold-dim);
-      letter-spacing: .12em; text-transform: uppercase; pointer-events: none; }
-
-    /* join popover */
-    #qrpop { position: fixed; right: 14px; top: 52px; z-index: 40; padding: .8rem; text-align: center;
-      background: linear-gradient(#2a0d12f2, #180709f2); border: 1px solid var(--gold-dim); border-radius: 8px;
-      box-shadow: 0 10px 30px rgba(0,0,0,.6); }
-    #qrpop .lbl { font: 700 .7rem var(--serif); letter-spacing: .14em; color: var(--gold-hi); margin-bottom: .5rem; }
-    #qr { width: 150px; height: 150px; background: #fdf6e6; padding: 6px; border-radius: 4px; }
-    #qr svg { width: 100%; height: 100%; display: block; }
-    #qrpop .sub { margin-top: .5rem; font-size: .72rem; color: #d8b98a; max-width: 18ch; }
     [hidden] { display: none !important; }
   </style>
 </head>
 <body>
   <div id="top">
-    <h1>♪ Wand Maestro</h1>
-    <div class="grp">
-      <button class="tbtn" id="start" title="start / resume">▶</button>
-      <button class="tbtn stop" id="stop" title="stop">■</button>
-      <button class="tbtn warn" id="panic" title="all notes off">✷</button>
-    </div>
-    <div class="grp"><span class="kv">♩</span><input type="range" id="tempo" min="60" max="180" value="100">
-      <span class="kv"><b id="bpm">100</b></span></div>
-    <div class="sp"></div>
-    <div class="grp kv">wand <span class="dot" id="wanddot"></span> <b id="wandvar">—</b></div>
-    <div class="grp kv">sync spread <b id="spread">—</b></div>
-    <div class="grp kv">phones <b id="pcount">0</b></div>
-    <button class="tbtn ghost" id="joinbtn">⧉ join</button>
-    <a class="tbtn ghost" href="../home/">← menu</a>
+    <h1>♪ WAND MAESTRO</h1>
+    <span class="kv"><span class="dot" id="conndot"></span> <b id="connlbl">connecting</b></span>
+    <span class="kv"><b id="pcount">0</b> devices</span>
+    <span class="kv">wand <span class="dot" id="wanddot"></span> <b id="wandvar">—</b></span>
+    <span class="sp"></span>
+    <span class="kv" id="songkv">song <b id="songname">—</b></span>
+    <span class="kv"><b id="bpmlbl">100</b> BPM</span>
+    <button class="tbtn" id="joinbtn">⧉ Join a phone</button>
+    <a class="tbtn ghost" href="../home/">menu</a>
   </div>
 
   <div id="main">
-    <!-- LEFT: the score, one lane per instrument -->
-    <div class="col" id="left">
-      <div class="panel-h"><span>Score</span><span id="songname"></span></div>
+    <!-- LEFT: the score -->
+    <div class="side" id="leftcol">
+      <div class="ph"><span>Tracks</span><span class="sub" id="barslbl"></span></div>
       <div class="scroll" id="lanes"></div>
-      <div id="leftempty">No song loaded — the built-in melody is playing. Drop a MIDI in the
-        <a href="../editor/" style="color:var(--gold)">Control Room</a> to see its instrument lanes here.</div>
+      <div id="leftempty">Built-in loop playing.<br>Drop a MIDI in the
+        <a href="../editor/" target="_blank">editor</a> and every instrument shows up here
+        — and as a card in the room.</div>
     </div>
 
-    <!-- CENTER: live camera wand + phones connecting to it -->
-    <div class="col" id="center">
-      <div class="panel-h"><span>Live Camera — your hand is the wand</span></div>
-      <div id="cambox">
-        <iframe id="camframe" title="webcam wand" allow="camera"></iframe>
-        <div id="dots"></div>
-        <div id="camstart">
-          <div class="big">🖐 Conduct with your hand</div>
-          <div class="sub">Turn on the webcam. Pinch to grab, wave to shape the music.</div>
-          <div class="go">Enable camera wand</div>
+    <!-- CENTER: the playground -->
+    <div id="room">
+      <svg id="links" preserveAspectRatio="none"></svg>
+      <div id="hub">
+        <div id="cambox">
+          <iframe id="camframe" title="webcam wand" allow="camera"></iframe>
+          <a id="campop" href="../cvwand/" target="_blank" title="open camera full-size">⤢</a>
+          <div id="camstart">
+            <div class="big">🖐 Your hand is the wand</div>
+            <div class="sub">pinch = grab · wave = shape the music</div>
+            <div class="go">Enable camera</div>
+          </div>
         </div>
+        <div id="hublbl">LAPTOP <b>(HUB)</b> — camera wand</div>
       </div>
-      <div class="panel-h" style="margin-top:.5rem"><span>Phones on the feed</span></div>
-      <div class="scroll" id="phones">
-        <div id="phonesempty">No phones yet — hit <b>⧉ join</b> and scan the QR. Each phone becomes an
-          instrument and shows up here, clock-synced to everyone else.</div>
+      <div id="roomqr">
+        <div class="lbl">SCAN TO JOIN</div>
+        <div id="qr"></div>
+        <div class="sub">each phone becomes an instrument in this room</div>
       </div>
+      <div id="roomhint" hidden><b>Drag</b> a card to where that phone really sits ·
+        <b>tap</b> it to conduct just that instrument</div>
     </div>
 
-    <!-- RIGHT: gesture + wand -->
-    <div class="col" id="right">
-      <div class="panel-h"><span>Gesture &amp; Wand</span></div>
+    <!-- RIGHT: gesture + target + status -->
+    <div class="side" id="rightcol">
+      <div class="ph"><span>Gesture</span><span class="sub">from the wand</span></div>
       <div class="body">
-        <div class="wandcard" id="wandcard">
-          <div class="ico">🪄</div>
-          <div class="st">wand <b id="wandst">not connected</b><br><span id="wandsub">enable the camera, or scan to conduct</span></div>
-        </div>
-        <div class="gbar"><div class="lbl">energy / speed <b id="v-energy">0.00</b></div><div class="track"><div class="fill" id="f-energy"></div></div></div>
+        <div class="gbar"><div class="lbl">energy <b id="v-energy">0.00</b></div><div class="track"><div class="fill" id="f-energy"></div></div></div>
         <div class="gbar"><div class="lbl">size <b id="v-size">0.00</b></div><div class="track"><div class="fill" id="f-size"></div></div></div>
-        <div class="gbar vert"><div class="lbl">vertical (lift) <b id="v-vertical">0.00</b></div><div class="track"><div class="fill" id="f-vertical"></div></div></div>
-        <div class="gbar"><div class="lbl">rotation / swirl <b id="v-rotation">0.00</b></div><div class="track"><div class="fill" id="f-rotation"></div></div></div>
-        <div class="gbar"><div class="lbl">duration <b id="v-duration">0.0s</b></div><div class="track"><div class="fill" id="f-duration"></div></div></div>
+        <div class="gbar vert"><div class="lbl">lift <b id="v-vertical">0.00</b></div><div class="track"><div class="fill" id="f-vertical"></div></div></div>
+        <div class="gbar"><div class="lbl">swirl <b id="v-rotation">0.00</b></div><div class="track"><div class="fill" id="f-rotation"></div></div></div>
         <div id="action">
           <div class="did">your gesture →</div>
           <div class="what" id="what">—</div>
         </div>
-      </div>
-    </div>
 
-    <!-- BOTTOM: live scrolling piano roll -->
-    <div id="rollwrap">
-      <canvas id="rollcanvas"></canvas>
-      <div id="nowplaying">warming up…</div>
-      <div id="rolltag">♪ live notes</div>
+        <div id="target">
+          <div class="who" id="targetwho">everyone</div>
+          <div class="hint" id="targethint">Tap a card in the room to conduct just that instrument.</div>
+          <div id="tctl" hidden>
+            <label>vol <input id="vol" type="range" min="0" max="100" value="100"></label>
+            <button class="sbtn" id="mute">Mute</button>
+            <button class="sbtn" id="unaim">✕ all</button>
+          </div>
+        </div>
+
+        <div id="status">
+          <div class="cell"><div class="k">sync</div><div class="v" id="spread">—</div></div>
+          <div class="cell"><div class="k">devices</div><div class="v" id="devcell">0</div></div>
+          <div class="cell"><div class="k">tempo</div><div class="v" id="bpmcell">100</div></div>
+        </div>
+      </div>
     </div>
   </div>
 
-  <div id="qrpop" class="panel" hidden>
-    <div class="lbl">SCAN TO JOIN</div>
-    <div id="qr"></div>
-    <div class="sub">your phone becomes an instrument</div>
+  <!-- BOTTOM: transport + live piano roll -->
+  <div id="bottom">
+    <div id="transport">
+      <div class="row">
+        <button class="pbtn" id="start" title="start">▶</button>
+        <button class="pbtn stop" id="stop" title="stop">■</button>
+        <button class="pbtn warn" id="panic" title="all notes off">✷</button>
+        <span id="pos">bar <b id="barpos">–</b></span>
+      </div>
+      <div class="row"><span class="kv">♩</span><input type="range" id="tempo" min="60" max="180" value="100">
+        <span class="kv"><b id="bpmval">100</b></span></div>
+    </div>
+    <div id="rollwrap">
+      <canvas id="rollcanvas"></canvas>
+      <div id="nowplaying">press ▶ to start</div>
+    </div>
   </div>
 
   <script src="../vendor/qrcode.js"></script>

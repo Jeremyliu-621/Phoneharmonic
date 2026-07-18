@@ -209,28 +209,40 @@ class Conductor:
             events.append(self._note(section, bar_start + on * self.s16_ms, dur * self.s16_ms,
                                      _clampmidi(midi + shift), max(0.05, vel * vol), art))
 
+    def _part_targets(self, i: int, part) -> list[SectionInfo | None]:
+        """All sections that should sound part i: every phone assigned this part's
+        instrument (doubled phones play in unison), else index round-robin as a
+        fallback so nothing is silent. No phones -> [None] = the laptop plays it."""
+        if not self._sections:
+            return [None]
+        matched = [s for s in self._sections if s.instrument == part.instrument]
+        return matched or [self._sections[i % len(self._sections)]]
+
     def _arrangement_events(self, idx: int, bar_start: float) -> list[NoteEvent]:
-        """Play a loaded MIDI's parts distributed across sections (round-robin;
-        laptop plays all via SECTION_ALL if no phones), plus the gesture layer
-        riding on the lead. Drums are skipped until we have a percussion voice."""
+        """Play a loaded MIDI's parts across sections by instrument assignment
+        (a part sounds on EVERY phone assigned to it — that's how two phones
+        double one instrument; laptop plays all via SECTION_ALL if no phones),
+        plus the gesture layer riding on the lead."""
         events: list[NoteEvent] = []
         n = len(self._sections)
         melody_info = None
         for i, part in enumerate(self.song.parts):
-            sinfo = self._sections[i % n] if n else None
+            targets = self._part_targets(i, part)
             if part.is_melody:
-                melody_info = sinfo
-            if sinfo is not None and (sinfo.muted or sinfo.volume <= 0.001):
-                continue
-            sec = SECTION_ALL if sinfo is None else sinfo.section_id
-            vol = 1.0 if sinfo is None else sinfo.volume
-            for (on, dur, midi, vel) in part.bars[idx % len(part.bars)]:
-                # Drum notes carry art="drum": the synth plays them as percussion by
-                # MIDI drum-map pitch, independent of the section's instrument timbre.
-                art = "drum" if part.is_drum else ("sustain" if dur >= 8 else "pluck")
-                midi_out = midi if part.is_drum else _clampmidi(midi)
-                events.append(self._note(sec, bar_start + on * self.s16_ms,
-                                         dur * self.s16_ms, midi_out, max(0.08, vel * vol), art))
+                melody_info = targets[0]
+            notes = part.bars[idx % len(part.bars)]
+            for sinfo in targets:
+                if sinfo is not None and (sinfo.muted or sinfo.volume <= 0.001):
+                    continue
+                sec = SECTION_ALL if sinfo is None else sinfo.section_id
+                vol = 1.0 if sinfo is None else sinfo.volume
+                for (on, dur, midi, vel) in notes:
+                    # Drum notes carry art="drum": the synth plays them as percussion
+                    # by MIDI drum-map pitch, independent of the section's timbre.
+                    art = "drum" if part.is_drum else ("sustain" if dur >= 8 else "pluck")
+                    midi_out = midi if part.is_drum else _clampmidi(midi)
+                    events.append(self._note(sec, bar_start + on * self.s16_ms,
+                                             dur * self.s16_ms, midi_out, max(0.08, vel * vol), art))
 
         # Gesture/editor accompaniment layer, riding on the lead instrument.
         bar, prev = self.song.bar(idx), self.song.bar(idx - 1)
