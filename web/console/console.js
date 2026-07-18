@@ -433,7 +433,7 @@ async function ensureAudio() {
 }
 
 // ── wire up ──────────────────────────────────────────────────────────────────
-conn = new Conn({ role: "stage", session, key: "console" });
+conn = new Conn({ role: "stage", session, key: "console", ephemeral: true });
 clock = new Clock((o) => conn.send(o));
 synth = new Synth(clock, null);
 

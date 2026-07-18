@@ -144,13 +144,25 @@ class App:
 
     async def _on_hello(self, ws: ServerConnection, hello: dict, role: str) -> ClientConn:
         client_id = hello.get("client_id") or uuid.uuid4().hex
-        # A reconnect while the previous socket is still lingering (phone woke up
-        # before the server's ping timeout noticed the old one died): close the
-        # zombie now. Its disconnect handler no-ops thanks to the identity guard.
         stale = self.hub.get(client_id)
         if stale is not None and stale.ws is not ws:
-            log.info("closing stale socket for %s (reconnect)", client_id[:8])
-            asyncio.create_task(self._close_quietly(stale.ws))
+            if role in ("stage", "admin"):
+                # Two dashboard tabs sharing a persisted id (a duplicated console
+                # tab) must NOT evict each other: eviction -> the loser reconnects
+                # -> it evicts the winner -> a 1 Hz mutual reconnect storm where
+                # each tab's socket lives ~1s and both starve of broadcasts (the
+                # "piano roll empty while audio plays" bug). Views hold no
+                # server-side state, so just give the newcomer its own identity
+                # and let every tab live.
+                client_id = uuid.uuid4().hex
+                log.info("stage id collision -> new identity %s", client_id[:8])
+            else:
+                # Sections/wand own a singular slot: a reconnect while the old
+                # socket lingers (phone woke before the ping timeout) means the
+                # old socket is a zombie — close it. Its disconnect handler
+                # no-ops thanks to the identity guard.
+                log.info("closing stale socket for %s (reconnect)", client_id[:8])
+                asyncio.create_task(self._close_quietly(stale.ws))
         conn = ClientConn(client_id=client_id, role=role, ws=ws, name=hello.get("name", ""))
         self.hub.register(conn)
 

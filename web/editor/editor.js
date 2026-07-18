@@ -27,9 +27,9 @@ const NICE = {
 const pr = new PianoRoll(el("pianoroll"));
 
 // ---- ws + clock ----
-// distinct `key` so the editor's own connection doesn't share a client-id with
-// the console open in another tab (they'd clobber each other in the hub).
-const conn = new Conn({ role: "stage", session, key: "editor" });
+// ephemeral: every editor tab is its own client — two tabs sharing one
+// persisted id would evict each other from the hub in a reconnect storm.
+const conn = new Conn({ role: "stage", session, key: "editor", ephemeral: true });
 const clock = new Clock((o) => conn.send(o));
 conn.on(P.CLOCK_PONG, (m) => clock.handlePong(m));
 
