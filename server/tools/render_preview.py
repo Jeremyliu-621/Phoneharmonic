@@ -29,7 +29,7 @@ from engine.theory import NAMES
 
 REPO = pathlib.Path(__file__).resolve().parent.parent.parent
 SF = REPO / "web" / "assets" / "sf"
-SR = 22050
+SR = 44100
 
 SAMPLE_MAP = {"piano": "acoustic_grand_piano", "violin": "violin", "viola": "viola",
               "cello": "cello", "flute": "flute", "clarinet": "clarinet",
@@ -75,8 +75,11 @@ def render(events, total_ms: float, out_path: pathlib.Path) -> None:
         if not data:
             continue
         rate = 2 ** (semis / 12)
-        dur = min(e.dur / 1000, max(0.1, len(data) / SR - 0.35))
-        tail = 0.4
+        # The envelope must reach zero BEFORE the sample runs out, or every
+        # note ends in a truncation click (hundreds of them = "static").
+        avail = len(data) / SR / rate - 0.02
+        dur = min(e.dur / 1000, max(0.08, avail - 0.1))
+        tail = max(0.05, min(0.4, avail - dur))
         length = int((dur + tail) * SR)
         start = int(e.at / 1000 * SR)
         p = PAN.get(e.inst or "", 0.0)
