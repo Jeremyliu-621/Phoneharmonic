@@ -66,6 +66,17 @@ ASSETS: dict[str, tuple] = {
                   "flat top-down, no people",
                   256, 192, False, None),
 
+    # ---- the ornate card frame (border-image 9-slice for the room nodes + hub) ----
+    # Opaque rectangle: dark walnut molding + brass corners around a PLAIN cream
+    # center. remove_bg stays off (frames with a hollow centre don't cut cleanly);
+    # CSS slices this as a border-image so the ornate corners never distort.
+    "card_plaque": ("an ornate empty rectangular sign plaque, a polished dark walnut wood "
+                    "frame with carved molding and small golden brass corner ornaments, the "
+                    "large center is one plain smooth blank warm cream parchment panel with "
+                    "absolutely nothing on it, symmetric, centered, thick even border, front "
+                    "view flat lay, single isolated object, plain background",
+                    128, 144, False, None),
+
     # ---- hub + mascots ----
     "hub_laptop": ("an open silver laptop computer sitting on a small wooden desk, front "
                    "view, the screen glowing with colorful music equalizer bars, "

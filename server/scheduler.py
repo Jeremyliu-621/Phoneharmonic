@@ -16,7 +16,7 @@ from clocksync import server_time_ms
 from config import LOOKAHEAD_MS, MIN_LEAD_MS, SCHED_TICK_MS
 from engine_api import MusicEngine
 from hub import Hub
-from protocol import ENGINE_STATE, SCHED_CANCEL, SCHED_NOTES
+from protocol import ENGINE_STATE, SCHED_CANCEL, SCHED_NOTES, WAND_ROLES
 
 log = logging.getLogger("sched")
 
@@ -108,4 +108,6 @@ class Scheduler:
                     "device": st.get("device"),
                     "intensity": st.get("intensity"),
                     "playing": st["playing"], "bpm": st["bpm"], "song": st["song"], "transport": tr,
-                }, roles=("stage", "admin"))
+                    # wand pages flash `device` so the conductor SEES what their
+                    # gesture did, in the same words as the console's moves card
+                }, roles=("stage", "admin", *WAND_ROLES))

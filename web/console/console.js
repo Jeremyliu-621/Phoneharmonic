@@ -17,21 +17,17 @@ import { Conn } from "../shared/ws.js";
 import { Clock } from "../shared/clock.js";
 import { Synth } from "../shared/synth.js";
 import { artistFor } from "../shared/artists.js";
+import { effectLabel } from "../shared/vocab.js";
 import * as P from "../shared/protocol.js";
 
 const params = new URLSearchParams(location.search);
 const session = params.get("s") || "lol1";
 const el = (id) => document.getElementById(id);
 
-// Boot beacon: if the header still says "connecting", this module never ran;
-// "js up — dialing" means we're alive and it's the WebSocket that's stuck.
-el("connlbl").textContent = "js up — dialing";
 console.log("[console] boot, ws target:", location.host);
 
 const SEMI = { C: 0, "C#": 1, D: 2, "D#": 3, E: 4, F: 5, "F#": 6, G: 7, "G#": 8, A: 9, "A#": 10, B: 11 };
 const noteToMidi = (n) => { const m = /^([A-G]#?)(-?\d+)$/.exec(n || ""); return m ? (parseInt(m[2], 10) + 1) * 12 + SEMI[m[1]] : 60; };
-const NICE = { lower_imitation: "Lower imitation", contrary_motion: "Contrary motion", sustained: "Sustained chord",
-  delayed: "Delayed echo", rhythmic_dense: "Rhythmic — busy", rhythmic: "Rhythmic — busy", rest: "Rest — silence" };
 const ICONS = ["drums", "piano", "bass", "violin", "cello", "viola", "flute",
   "clarinet", "trumpet", "harp", "bell", "synth"];
 
@@ -162,7 +158,9 @@ function upsertCards() {
 function drawLinks() {
   const r = roomBox();
   const hub = { x: r.width / 2, y: r.height / 2 };
-  let out = "";
+  // one shared soft-glow filter so the cables read as luminous strands, not flat lines
+  let out = `<defs><filter id="cableglow" x="-50%" y="-50%" width="200%" height="200%">`
+    + `<feGaussianBlur stdDeviation="2.6"/></filter></defs>`;
   groups.forEach((g) => {
     const node = cardEls.get(g.key);
     const p = dragging?.key === g.key && node
@@ -170,10 +168,12 @@ function drawLinks() {
       : toScreen(g.px, g.py, r);
     const c = colorOf(g.instrument);
     const aimed = g.key === aimedGroup;
-    // dark underlay first so the cable reads on the busy room art
-    out += `<line x1="${hub.x}" y1="${hub.y}" x2="${p.x}" y2="${p.y}" stroke="#362619" stroke-opacity="0.3" stroke-width="${aimed ? 7 : 5.4}"/>`;
-    out += `<line x1="${hub.x}" y1="${hub.y}" x2="${p.x}" y2="${p.y}" stroke="${c}" stroke-opacity="${aimed ? 0.95 : 0.5}" stroke-width="${aimed ? 3.4 : 2}"/>`;
-    out += `<line class="flow" x1="${hub.x}" y1="${hub.y}" x2="${p.x}" y2="${p.y}" stroke="${c}" stroke-opacity="${aimed ? 1 : 0.85}" stroke-width="${aimed ? 4.4 : 3}"/>`;
+    const A = `x1="${hub.x}" y1="${hub.y}" x2="${p.x}" y2="${p.y}"`;
+    // soft coloured glow → dark ink underlay (reads on busy art) → solid core → bright flowing strand
+    out += `<line ${A} stroke="${c}" stroke-opacity="${aimed ? 0.55 : 0.3}" stroke-width="${aimed ? 10 : 7.5}" filter="url(#cableglow)"/>`;
+    out += `<line ${A} stroke="#362619" stroke-opacity="0.3" stroke-width="${aimed ? 7 : 5.4}"/>`;
+    out += `<line ${A} stroke="${c}" stroke-opacity="${aimed ? 0.95 : 0.55}" stroke-width="${aimed ? 3.4 : 2}"/>`;
+    out += `<line class="flow" ${A} stroke="#fbf2dd" stroke-opacity="${aimed ? 0.9 : 0.6}" stroke-width="${aimed ? 2 : 1.5}"/>`;
   });
   el("links").innerHTML = out;
 }
@@ -225,10 +225,6 @@ function setAim(key) {
 // ── roster ───────────────────────────────────────────────────────────────────
 function renderRoster(m) {
   sections = (m.sections || []).filter((s) => s.connected);
-  el("pcount").textContent = sections.length;
-  const w = m.wand || {};
-  el("wanddot").classList.toggle("ok", !!w.connected);
-  el("wandvar").textContent = w.connected ? w.variant : "—";
 
   const th = sections.filter((s) => s.ready && s.theta != null).map((s) => s.theta);
   const sp = el("spread");
@@ -283,14 +279,16 @@ function applyEngine(eng) {
     el("v-rotation").textContent = (g.rotation ?? 0).toFixed(2); bar("rotation", g.rotation ?? 0, 1);
   }
 
-  const label = eng.last_choice ? (NICE[eng.last_choice] || eng.last_choice) : "—";
-  el("nowplaying").innerHTML = eng.playing ? `now playing <b>${label}</b>` : "press ▶ to start";
-  if (eng.last_choice && eng.last_choice !== lastChoice) {
-    lastChoice = eng.last_choice;
-    const oct = g && g.vertical > 0.6 ? '<span class="oct">⬆ octave up</span>'
-      : (g && g.vertical < -0.6 ? '<span class="oct">⬇ octave down</span>' : "");
-    el("what").innerHTML = label + oct;
+  // ONE vocabulary everywhere: the engine's `device` = what the last gesture
+  // ACTUALLY did (same words as the moves card and the camera flash).
+  if (eng.device !== undefined && eng.device !== lastChoice) {
+    lastChoice = eng.device;
+    const fx = effectLabel(eng.device);
+    el("what").textContent = `${fx.icon} ${fx.label}`;
   }
+  const fx = effectLabel(eng.device);
+  el("nowplaying").innerHTML = eng.playing
+    ? `now playing <b>${eng.song || "—"}</b> · ${fx.icon} ${fx.label}` : "press ▶ to start";
   // ENGINE_STATE is a light update WITHOUT tracks (they ride on ROSTER only) —
   // rebuilding lanes from it would blank the score until the next roster.
   if (eng.tracks) renderLanes(eng.tracks);
@@ -424,8 +422,6 @@ conn.on(P.SCHED_NOTES, (m) => {
 conn.on(P.SCHED_CANCEL, (m) => { if (m.allnotesoff) synth.panic(); });
 
 conn.onOpen((welcome) => {
-  el("conndot").classList.add("ok");
-  el("connlbl").textContent = "connected";
   // A fresh server process restarts its note-id counter; stale "seen" ids would
   // make the roll drop every new event while the audio path keeps playing.
   seen.clear();
@@ -437,8 +433,6 @@ conn.onOpen((welcome) => {
     el("qr").innerHTML = qr.createSvgTag({ cellSize: 5, margin: 1, scalable: true });
   }
 });
-conn.onClose(() => { el("conndot").classList.remove("ok"); el("connlbl").textContent = "reconnecting"; });
-
 el("start").addEventListener("click", async () => {
   await ensureAudio();
   started = true;

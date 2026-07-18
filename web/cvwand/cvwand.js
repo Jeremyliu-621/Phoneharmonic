@@ -11,6 +11,7 @@
 import { HandLandmarker, FilesetResolver }
   from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
 import { Conn } from "../shared/ws.js";
+import { effectLabel } from "../shared/vocab.js";
 import * as P from "../shared/protocol.js";
 
 const MP_VER = "0.10.14";
@@ -100,10 +101,21 @@ async function boot() {
 boot();
 
 // --- WebSocket ---
+let lastDevice = null;
 function connect() {
   conn = new Conn({ role: "wand-cv", session });
   conn.onOpen(() => { el("dot").classList.add("ok"); });
   conn.onClose(() => { el("dot").classList.remove("ok"); });
+  // No guesswork: the engine reports what each gesture ACTUALLY did (`device`),
+  // and we flash it on screen in the exact words of the console's moves card.
+  conn.on(P.ENGINE_STATE, (m) => {
+    if (m.device === undefined || m.device === lastDevice) return;
+    const first = lastDevice === null;
+    lastDevice = m.device;
+    if (first) return;                    // initial sync, not something you did
+    const fx = effectLabel(m.device);
+    flashCmd(`${fx.icon} ${fx.label}`);
+  });
   conn.connect();
 }
 
