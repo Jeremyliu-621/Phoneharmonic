@@ -269,7 +269,7 @@ function applyEngine(eng) {
   el("bpmlbl").textContent = bpm; el("bpmcell").textContent = bpm;
   el("songname").textContent = eng.song || "—";
   if (eng.song !== curSong) { curSong = eng.song; dropIdle(); }   // new song landed
-  el("barslbl").textContent = eng.bars ? eng.bars + " bars" : "";
+  if (eng.bars) el("barslbl").textContent = eng.bars + " bars";
   if (eng.transport) transport = eng.transport;
   engineAimed = eng.aimed || null;
 
@@ -289,7 +289,9 @@ function applyEngine(eng) {
       : (g && g.vertical < -0.6 ? '<span class="oct">⬇ octave down</span>' : "");
     el("what").innerHTML = label + oct;
   }
-  renderLanes(eng.tracks || []);
+  // ENGINE_STATE is a light update WITHOUT tracks (they ride on ROSTER only) —
+  // rebuilding lanes from it would blank the score until the next roster.
+  if (eng.tracks) renderLanes(eng.tracks);
 }
 
 // ── left lanes ───────────────────────────────────────────────────────────────
@@ -431,17 +433,6 @@ conn.onOpen((welcome) => {
   if (join && window.qrcode) {
     const qr = window.qrcode(0, "M"); qr.addData(join); qr.make();
     el("qr").innerHTML = qr.createSvgTag({ cellSize: 5, margin: 1, scalable: true });
-  }
-  // Laptops don't scan QRs — show the URL, click to copy.
-  if (join) {
-    const link = el("joinlink");
-    link.textContent = join.replace(/^https?:\/\//, "");
-    link.onclick = async () => {
-      try { await navigator.clipboard.writeText(join); } catch { /* http non-localhost may deny */ }
-      link.textContent = "✓ copied";
-      link.classList.add("copied");
-      setTimeout(() => { link.textContent = join.replace(/^https?:\/\//, ""); link.classList.remove("copied"); }, 1400);
-    };
   }
 });
 conn.onClose(() => { el("conndot").classList.remove("ok"); el("connlbl").textContent = "reconnecting"; });

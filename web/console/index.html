@@ -94,7 +94,11 @@
     /* ═══ the playground ═══ */
     #room { position: relative; border-radius: 12px; overflow: hidden; touch-action: none;
       border: 3px solid var(--ink); box-shadow: var(--shadow);
-      background: #b98d5f url("../assets/pixel/room_bg.png") center / cover no-repeat; }
+      background-color: #efe7d6;
+      background-image:
+        linear-gradient(rgba(54,38,25,.08) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(54,38,25,.08) 1px, transparent 1px);
+      background-size: 30px 30px; }
     #links { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
     #links line { stroke-linecap: round; }
     #links .flow { stroke-dasharray: 4 8; animation: flow 1.1s linear infinite; }
@@ -148,15 +152,9 @@
     #roomqr { position: absolute; left: 50%; top: 77%; transform: translate(-50%, -50%); z-index: 7;
       text-align: center; padding: .7rem .8rem; background: var(--card); border: var(--border);
       border-radius: 10px; box-shadow: var(--shadow); }
-    #roomqr .lbl { font: 700 9px var(--px-display); letter-spacing: .06em; text-transform: uppercase;
-      color: var(--purple); margin-bottom: .45rem; }
     #roomqr #qr { width: 116px; height: 116px; background: #fff; padding: 5px; border-radius: 4px;
       border: 2px solid var(--card-deep); margin: 0 auto; }
     #roomqr #qr svg { width: 100%; height: 100%; display: block; }
-    #roomqr .sub { margin-top: .4rem; font-size: 12px; color: var(--ink-soft); max-width: 18ch; line-height: 1.35; }
-    #joinlink { margin-top: .3rem; font: 600 11px var(--px-body); color: var(--purple); cursor: pointer;
-      max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-inline: auto; }
-    #joinlink.copied { color: var(--green); }
     #roomhint { position: absolute; left: 12px; bottom: 10px; z-index: 7; font: 600 12px var(--px-body);
       color: var(--ink-soft); background: var(--card); border: 2px solid var(--ink); border-radius: 8px;
       padding: .35rem .6rem; pointer-events: none; max-width: 310px; line-height: 1.45;
@@ -186,6 +184,19 @@
     .gbar.g-size .fill { --bar: #e8a13c; }
     .gbar.g-lift .fill { --bar: var(--blue); }
     .gbar.g-swirl .fill { --bar: #8e5bd4; }
+
+    /* the CV cheat-sheet: what each hand move does */
+    #moves { margin-top: .55rem; border: 2px solid var(--card-deep); border-radius: 9px;
+      background: #fdfaf2; padding: .45rem .55rem .4rem; }
+    #moves .mh { font: 700 8px var(--px-display); letter-spacing: .12em; text-transform: uppercase;
+      color: var(--ink-soft); margin-bottom: .2rem; }
+    #moves .mv { display: flex; gap: .45rem; align-items: flex-start; padding: .3rem 0; }
+    #moves .mv + .mv { border-top: 1px solid var(--card-deep); }
+    #moves .ic { font-size: 13px; line-height: 1.2; flex: none; }
+    #moves b { display: block; font: 700 8px var(--px-display); text-transform: uppercase;
+      letter-spacing: .02em; }
+    #moves i { display: block; font: 600 10px var(--px-body); font-style: normal;
+      color: var(--ink-soft); line-height: 1.3; }
 
     #status { margin-top: .55rem; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: .4rem; }
     #status .cell { padding: .45rem .3rem; border-radius: 8px; border: 2px solid var(--card-deep);
@@ -268,10 +279,7 @@
         </div>
       </div>
       <div id="roomqr">
-        <div class="lbl">Join the orchestra</div>
         <div id="qr"></div>
-        <div class="sub">scan with your phone — each device becomes an instrument</div>
-        <div id="joinlink" title="click to copy — laptops just open this URL">…</div>
       </div>
       <div id="roomhint" hidden><b>Drag</b> a phone to where it really sits ·
         <b>tap</b> it to conduct just that instrument</div>
@@ -290,6 +298,17 @@
         <div class="gbar g-size"><div class="lbl">size <b id="v-size">0.00</b></div><div class="track"><div class="fill" id="f-size"></div></div></div>
         <div class="gbar g-lift"><div class="lbl">lift <b id="v-vertical">0.00</b></div><div class="track"><div class="fill" id="f-vertical"></div></div></div>
         <div class="gbar g-swirl"><div class="lbl">swirl <b id="v-rotation">0.00</b></div><div class="track"><div class="fill" id="f-rotation"></div></div></div>
+
+        <div id="moves">
+          <div class="mh">✨ Moves</div>
+          <div class="mv"><span class="ic">🤏</span><div><b>Pinch + move</b><i>conduct — shape the music</i></div></div>
+          <div class="mv"><span class="ic">🙌</span><div><b>Slow lift (pinched)</b><i>swell — builds to a climax</i></div></div>
+          <div class="mv"><span class="ic">🤫</span><div><b>Small, calm moves</b><i>hush — softer and simpler</i></div></div>
+          <div class="mv"><span class="ic">⚡</span><div><b>Big, fast moves</b><i>full orchestra + harmony</i></div></div>
+          <div class="mv"><span class="ic">✋</span><div><b>Hold open palm</b><i>play / pause the show</i></div></div>
+          <div class="mv"><span class="ic">👋</span><div><b>Palm swipe ←→</b><i>rewind / skip 4 bars</i></div></div>
+          <div class="mv"><span class="ic">🎯</span><div><b>Tap a phone card</b><i>solo that instrument</i></div></div>
+        </div>
 
         <div id="status">
           <div class="cell"><div class="k">sync</div><div class="v" id="spread">—</div></div>
