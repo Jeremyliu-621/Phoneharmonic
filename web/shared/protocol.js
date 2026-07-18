@@ -22,6 +22,7 @@ export const SONG_LOAD = "song.load";
 export const SONG_HUM = "song.hum";       // {frames: [[t_ms, midi_float, rms], ...]}
 export const SONG_FILE = "song.file";     // {name} load songs/<name>.mid server-side
 export const CLOCK_REPORT = "clock.report";
+export const CV_STATE = "cv.state";           // {gesture|null, mode, confidence}
 
 // Server -> Client
 export const WELCOME = "welcome";

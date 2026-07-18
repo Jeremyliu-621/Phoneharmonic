@@ -27,6 +27,12 @@ SONG_LOAD = "song.load"         # {name, data}  data = base64 of a .mid file -> 
 SONG_HUM = "song.hum"           # {frames:[[t_ms, midi_float, rms], ...]}  hummed melody -> new song
 SONG_FILE = "song.file"         # {name}  load songs/<name>.mid from the server's disk
 CLOCK_REPORT = "clock.report"   # {theta, rtt}  section's own sync estimate (debug/health readout)
+CV_STATE = "cv.state"           # {gesture|null, mode, confidence}  debounced webcam recognizer state
+
+# Closed vocabularies for CV_STATE. Keeping these server-side prevents arbitrary
+# client strings (including control characters) from being written to the log.
+CV_GESTURES = ("PALM", "PINCH", "FIST", "ONE_FINGER", "TWO_FINGERS", "THREE_FINGERS")
+CV_MODES = ("NONE", "SELECT", "DETERMINISTIC", "AI")
 
 # --- Server -> Client ---
 WELCOME = "welcome"             # {v, client_id, role, server_time, config}
