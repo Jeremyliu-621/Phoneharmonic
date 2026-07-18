@@ -17,7 +17,9 @@ from dataclasses import dataclass
 
 from engine.candidates import GENERATORS
 
-CANDIDATES = list(GENERATORS)
+# "generated" is the bar-line model's freshly written line (ml/barmodel.py);
+# it competes with the rule-based candidates whenever one has arrived.
+CANDIDATES = list(GENERATORS) + ["generated"]
 
 DECISION_SCHEMA: dict = {
     "type": "object",
@@ -78,3 +80,52 @@ def parse_decision(text: str, source: str = "model") -> Decision | None:
     if cand not in CANDIDATES or shift not in (-1, 0, 1):
         return None
     return Decision(candidate=cand, octave_shift=int(shift), source=source)
+
+
+# --- The bar-line ("music editing") model contract ---------------------------
+# One bar of accompaniment on the 16th grid: {"notes": [[onset, dur, midi, vel], ...]}.
+# The server sanitizes every reply (snap to key, fold into register, clamp to
+# the grid) — the model supplies contour and rhythm, the engine guarantees
+# playability.
+
+STYLES = ["dense", "calm", "counter", "echo", "free"]
+
+BAR_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "notes": {
+            "type": "array",
+            "maxItems": 16,
+            "items": {"type": "array", "minItems": 4, "maxItems": 4,
+                      "items": {"type": "number"}},
+        },
+    },
+    "required": ["notes"],
+    "additionalProperties": False,
+}
+
+BAR_INSTRUCTION = (
+    "You write one bar of accompaniment for a gesture-conducted orchestra. Given "
+    'the musical context, reply with ONLY a JSON object {"notes": [[onset, dur, '
+    "midi, velocity], ...]}: onset 0-15 on the 16th-note grid, dur 1-16 "
+    "sixteenths, midi pitch 40-84 in the given key, velocity 0.1-1.0. Match the "
+    "requested style: dense=busy subdivision, calm=long low chord tones, "
+    "counter=moves against the melody, echo=answers the previous bar, free=your "
+    "choice. Stay out of the melody's way."
+)
+
+
+def build_bar_context(*, key_root: int, bpm: float, chord_root: int, chord_minor: bool,
+                      style: str, melody, prev_melody) -> dict:
+    return {
+        "key": key_root,
+        "bpm": round(bpm),
+        "chord": {"root": chord_root, "minor": chord_minor},
+        "style": style,
+        "melody": [[int(a), int(b), int(c)] for (a, b, c) in melody],
+        "prev_melody": [[int(a), int(b), int(c)] for (a, b, c) in prev_melody],
+    }
+
+
+def bar_prompt_for(context: dict) -> str:
+    return BAR_INSTRUCTION + "\nContext: " + json.dumps(context, separators=(",", ":"))

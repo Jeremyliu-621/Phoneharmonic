@@ -1,124 +1,128 @@
-# Training the decision model (Freesolo)
+# Training the AI (two models on Freesolo)
 
-The conductor's musical brain is a **swappable decision policy**: given the
-musical context and the latest gesture, emit one tiny JSON decision —
+The orchestra has **two trained brains**, both served as OpenAI-compatible
+endpoints, both with instant rule-based fallbacks — the music can never stall
+on a network call:
 
-```json
-{"candidate": "rhythmic_dense", "octave_shift": 0}
+1. **Decision model** ("input → action"): given the musical context and the
+   conductor's gesture, pick the accompaniment and register —
+   `{"candidate": "rhythmic_dense", "octave_shift": 0}`. Replaces the
+   hand-written ranker (`server/ml/heuristic.py`).
+2. **Bar-line model** ("music editing"): given key/chord/melody and a style
+   directive, *write a new accompaniment line note-by-note* —
+   `{"notes": [[onset, dur, midi, vel], ...]}`. It appears in the engine as
+   the extra candidate **"generated"**, prefetched one bar ahead, and every
+   reply is sanitized (snapped to key, folded into register, clamped to the
+   grid) so the model supplies contour and rhythm while the engine guarantees
+   playability.
+
+Both contracts live in `server/ml/schema.py` — the single source of truth for
+the server parser, the dataset builders, and the GRPO `structured_outputs`.
+
+**Verified facts** (checked 2026-07-18): Freesolo is at **freesolo.co** (not
+.ai). Runs are pre-quoted fixed-price (`--cost`); small LoRA runs finish in
+minutes-to-hours for single-digit dollars; `flash deploy` gives an
+OpenAI-compatible endpoint. Critical rule: **`structured_outputs` is only
+valid for GRPO/OPD — an SFT config containing it is rejected at submit.**
+
+## The pipeline
+
+```
+                 DECISION MODEL                      BAR-LINE MODEL
+play sessions -> server/data/decisions/*.jsonl   folder of .mid files (optional)
+                        |                                 |
+        tools/build_dataset.py                tools/build_bar_dataset.py
+        (harvest + synthetic + TASTE_RULES)   (theory pairs + real arrangements)
+                        |                                 |
+        freesolo/decision/dataset/            freesolo/barline/dataset/
+                        |                                 |
+        flash train decision/configs/{sft,rl}  flash train barline/configs/{sft,rl}
+                        |                                 |
+        flash deploy -> WM_MODEL_URL/NAME/KEY  flash deploy -> WM_BARMODEL_URL/NAME/KEY
+                        \_________________________________/
+                                python server/main.py
+                    (heuristic + rule-generators cover all failures)
 ```
 
-Out of the box the hand-written heuristic (`server/ml/heuristic.py`) is the
-policy. This doc is the full path to replacing it with a model you post-train
-on Freesolo — and how the server keeps playing flawlessly when that model is
-slow, down, or wrong.
+## Division of labor
 
-**Verified facts** (checked 2026-07-18): Freesolo lives at **freesolo.co**
-(not .ai — that domain is parked). Runs are pre-quoted fixed-price
-(`--cost`), small LoRA runs finish in minutes-to-hours and cost single-digit
-dollars, and a deploy gives an **OpenAI-compatible** endpoint. Critical rule:
-**`structured_outputs` is only valid for GRPO/OPD — an SFT config containing
-it is rejected at submit.**
+**On this machine (no account needed) — all built and tested:**
+- Harvest data: run the server, conduct; every bar logs a training row, wand
+  thumbs up/down weight them (`WM_DECISION_LOG=0` disables).
+- Build datasets: `python server/tools/build_dataset.py` and
+  `python server/tools/build_bar_dataset.py [--midi-dir songs/]`.
+- Encode taste: edit `TASTE_RULES` in build_dataset.py (label overrides where
+  your judgment disagrees with the heuristic) and feed the bar model MIDIs in
+  the style the orchestra should speak.
+- Rehearse without any deploy: `python server/tools/mock_model.py`, then start
+  the server with the printed env vars — the full AI-enabled system runs
+  against local stand-ins. This is also the on-stage fallback if the venue
+  loses internet.
+- Verify: `python server/tools/policy_test.py` and `barmodel_test.py`.
 
-## How the pieces fit
-
-```
-play sessions ──> server/data/decisions/*.jsonl      (logged live, every bar)
-                          │
-                          v
-        python server/tools/build_dataset.py         (+ synthetic sweep + TASTE_RULES)
-                          │
-                          v
-              freesolo/dataset/{train,eval}.jsonl    ({"input","output"} rows)
-                          │
-        flash train freesolo/configs/sft.toml        (imitation)
-        flash train freesolo/configs/rl.toml         (GRPO vs environment.py reward)
-                          │
-        flash deploy <run-id>                        (OpenAI-compatible endpoint)
-                          │
-                          v
-   WM_MODEL_URL/WM_MODEL_NAME/WM_MODEL_KEY -> server (heuristic fallback built in)
-```
-
-## Step 1 — harvest data by playing
-
-Run the server and conduct. Every bar the conductor appends a JSONL row
-(context, decision, source) to `server/data/decisions/session-*.jsonl`; a
-wand thumbs-up/down (`wand.feedback`) attaches to the decision it judged —
-thumbs-down rows are dropped from the dataset, thumbs-up rows weighted 3x.
-An hour of deliberate conducting (vary energy, twists, lifts, stillness) is
-a few thousand rows. `WM_DECISION_LOG=0` disables logging.
-
-## Step 2 — build the dataset
-
-```bash
-python server/tools/build_dataset.py          # -> freesolo/dataset/{train,eval}.jsonl
-```
-
-Merges your harvested rows with a seeded synthetic sweep of the feature space
-labeled by the heuristic. **Edit `TASTE_RULES` in build_dataset.py** — label
-overrides where your musical judgment disagrees with the heuristic. That's
-the point of training at all: the model becomes yours, not a lossy copy of
-`heuristic.py`. Output rows are validated against the decision schema
-(`server/ml/schema.py DECISION_SCHEMA`) before writing.
-
-## Step 3 — train on Freesolo
-
+**On Freesolo (account + credits), per model:**
 ```bash
 uv tool install freesolo-flash
-flash login --api-key            # key from the freesolo.co dashboard; prepay a small balance
-flash env setup                  # scaffolds the env — reconcile freesolo/ with what it generates
-flash env push                   # uploads the environment + dataset/
+flash login --api-key                 # dashboard key
+flash env setup                       # scaffold; reconcile freesolo/<model>/ with it
+flash env push                        # uploads environment + dataset/
 
-flash train freesolo/configs/sft.toml --cost    # fixed quote, no submit
-flash train freesolo/configs/sft.toml           # stage 1: imitation
-flash train freesolo/configs/rl.toml --cost
-flash train freesolo/configs/rl.toml            # stage 2: GRPO vs score_response
-```
-
-- `freesolo/environment.py:score_response` is the GRPO reward: 0.35 format +
-  0.35 gesture-consistency + 0.15 octave-shift intent + 0.15 don't-repeat.
-  It inlines a port of `heuristic.rank` — if you tune the heuristic, re-port.
-- `rl.toml` embeds the decision schema as `structured_outputs`, so the
-  GRPO'd adapter physically cannot emit off-format tokens (and it becomes
-  the serving default). Do **not** add that key to `sft.toml`.
-- Budget guide: an SFT on a ~2B model quotes in the ~$10 range, a 300-step
-  GRPO on a small model in cents-to-dollars. Model ids: see the catalog at
-  freesolo.co/docs/reference/models; key names may drift — trust the
-  `flash env setup` scaffold over these files where they disagree.
-
-## Step 4 — deploy and point the server at it
-
-```bash
+flash train freesolo/decision/configs/sft.toml --cost   # fixed quote first, always
+flash train freesolo/decision/configs/sft.toml
+flash train freesolo/decision/configs/rl.toml --cost
+flash train freesolo/decision/configs/rl.toml           # GRPO vs environment.py
 flash deploy <run-id>
-export WM_MODEL_URL=https://<serving-host>/v1   # the deploy's OpenAI-compatible base
-export WM_MODEL_NAME=<run-id>
-export WM_MODEL_KEY=<key>
+```
+Then export the env vars and restart the server:
+```bash
+export WM_MODEL_URL=https://<host>/v1    WM_MODEL_NAME=<decision-run> WM_MODEL_KEY=<key>
+export WM_BARMODEL_URL=https://<host>/v1 WM_BARMODEL_NAME=<barline-run> WM_BARMODEL_KEY=<key>
 python server/main.py
 ```
+Sanity-check any deploy with the plain OpenAI SDK/curl before wiring it in.
 
-Sanity-check the endpoint first with the standard OpenAI SDK
-(`base_url=$WM_MODEL_URL, model=$WM_MODEL_NAME`) or curl.
+## Recommended training order (hackathon clock)
 
-## What the server does with it (and without it)
+1. **Decision SFT** first — smallest model (0.8b/2b), minutes to train, and
+   the demo story ("the model that picks the music was trained today on my
+   conducting") lands immediately. Ship it, keep playing.
+2. **Bar-line SFT** next (4b if the quote allows) — the flashier capability:
+   the orchestra plays lines no rule wrote. `--midi-dir` data makes or breaks
+   the phrasing; even 20-50 MIDIs help.
+3. **GRPO both** once SFT adapters exist and you've heard their failure
+   modes — the rewards (`freesolo/*/environment.py`) are already written:
+   decision = format + gesture-consistency + shift-intent + don't-repeat;
+   bar-line = format + grid + in-key + register + style match + melody
+   clearance. Chain each from its SFT run.
+4. **Re-harvest and retrain** — every rehearsal logs more rows; a second SFT
+   pass the night before the demo is cheap and real.
 
-- On every completed gesture the conductor fires an **async** ask
-  (`server/ml/policy.py RemoteModel`) with an ~800ms budget
-  (`WM_MODEL_TIMEOUT_MS`). The bar is never delayed: decisions are consumed
-  at the next bar boundary, and there is a full bar (~2.4s at 100 BPM) of
-  headroom.
-- Priority per bar: **editor override > model answer > heuristic**. A model
-  answer stays active until the next gesture; a new gesture clears it so a
-  stale answer can never outlive the intent that asked for it.
-- Any failure — timeout, HTTP error, off-format reply — logs one warning and
-  the heuristic covers, silently. Pull the network cable mid-set and the
-  music does not stop. The editor/stage roster shows which brain made the
-  last call (`engine.decision_source`).
-- Every decision (model or heuristic) is logged back into the harvest, so
-  each rehearsal makes the next training run better.
+Reward/heuristic sync warning: the GRPO environments inline ports of
+`heuristic.rank` and `barmodel.sanitize_line` — if you tune those, re-port.
 
-## Verify headless
+## What the server does at run time
 
-```bash
-python server/tools/policy_test.py    # fake endpoint: model path, fallback, dataset validity
-python server/tools/gesture_test.py   # heuristic path unchanged
-```
+- **Decision**: asked async on every completed gesture, ~800ms budget
+  (`WM_MODEL_TIMEOUT_MS`); its answer holds until the next gesture; editor
+  override > model > heuristic; a new gesture clears any stale answer. The
+  roster's `engine.decision_source` shows which brain made the last call.
+- **Bar-line**: prefetched for bar N+1 while bar N plays (~2.4s of headroom,
+  `WM_BARMODEL_TIMEOUT_MS`); arrives as candidate "generated", which the
+  ranker favors for flowing mid-energy gestures, the decision model can pick
+  by name, and the editor can force ("AI-written line"). A missed bar just
+  means the six rule-based candidates compete alone.
+- Every decision, from either brain or the fallback, is logged back into the
+  harvest — playing the instrument improves the next training run.
+
+## Other AI integrations (scoped, not yet built)
+
+- **Voice drops** (ElevenLabs `eleven_flash_v2_5` WebSocket, ~100-150ms
+  end-to-end): a server hook that announces set moments; free tier is ~10
+  min/month — the $6 Starter tier covers a demo weekend.
+- **Set-memory commentator** (Backboard.io — MLH partner, $5 free credits):
+  one assistant with cross-thread memory fed section joins/drops and gesture
+  stats; its ElevenLabs-voiced lines become the "DJ drop" layer. Backboard is
+  a stateful assistant API, not a router — fan-out stays in our server.
+- **Solana cNFT** of the finished set (Crossmint staging/devnet, one REST
+  call): hash of the decision log + stats in the metadata. Helius's mint API
+  is deprecated; don't use it.

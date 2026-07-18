@@ -15,7 +15,7 @@ server/data/prefs/
 server/data/gestures/
 server/data/models/*.pkl
 server/data/decisions/
-freesolo/dataset/
+freesolo/*/dataset/
 
 # Firmware secrets
 firmware/wand/config.h

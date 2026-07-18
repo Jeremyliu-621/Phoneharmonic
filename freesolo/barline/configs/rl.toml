@@ -1,0 +1,23 @@
+# Freesolo Flash — bar-line model, stage 2: GRPO against environment.py.
+#
+# Reward = format + grid validity + in-key + register + style match + melody
+# clearance. structured_outputs mirrors server/ml/schema.py BAR_SCHEMA so the
+# model cannot emit off-format tokens while sampling (and it becomes the
+# serving default). Quote first:
+#   flash train freesolo/barline/configs/rl.toml --cost
+# Chain from the SFT run — check the docs for the exact key name.
+
+model = "qwen3.5-4b"
+algorithm = "grpo"
+
+[train]
+max_steps = 400
+group_size = 8
+temperature = 0.8
+kl_penalty_coef = 0.01
+lora_rank = 32
+lora_alpha = 64
+learning_rate = 5e-6
+batch_size = 4
+max_context_tokens = 768
+structured_outputs = '{"type":"object","properties":{"notes":{"type":"array","maxItems":16,"items":{"type":"array","minItems":4,"maxItems":4,"items":{"type":"number"}}}},"required":["notes"],"additionalProperties":false}'

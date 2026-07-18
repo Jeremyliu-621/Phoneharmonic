@@ -22,4 +22,4 @@ lora_alpha = 64
 learning_rate = 5e-6
 batch_size = 4
 max_context_tokens = 512
-structured_outputs = '{"type":"object","properties":{"candidate":{"type":"string","enum":["lower_imitation","contrary_motion","sustained","delayed","rhythmic_dense","rest"]},"octave_shift":{"type":"integer","enum":[-1,0,1]}},"required":["candidate","octave_shift"],"additionalProperties":false}'
+structured_outputs = '{"type":"object","properties":{"candidate":{"type":"string","enum":["lower_imitation","contrary_motion","sustained","delayed","rhythmic_dense","rest","generated"]},"octave_shift":{"type":"integer","enum":[-1,0,1]}},"required":["candidate","octave_shift"],"additionalProperties":false}'

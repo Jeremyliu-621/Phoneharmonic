@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 
 CANDIDATES = ["lower_imitation", "contrary_motion", "sustained", "delayed",
-              "rhythmic_dense", "rest"]
+              "rhythmic_dense", "rest", "generated"]
 
 
 def _context_from(prompt: str) -> dict | None:
@@ -55,6 +55,7 @@ def _candidate_scores(context: dict) -> dict[str, float]:
         "contrary_motion": 0.30 + 1.20 * rot + 0.25 * max(0.0, -vert),
         "delayed": 0.20 + 0.80 * energy_intent * flick,
         "rhythmic_dense": 0.10 + 1.30 * energy_intent,
+        "generated": 0.55 + 0.35 * energy_intent,
     }
 
 

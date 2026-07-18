@@ -44,3 +44,11 @@ MODEL_URL = os.environ.get("WM_MODEL_URL", "")
 MODEL_NAME = os.environ.get("WM_MODEL_NAME", "")
 MODEL_KEY = os.environ.get("WM_MODEL_KEY", "")
 MODEL_TIMEOUT_MS = float(os.environ.get("WM_MODEL_TIMEOUT_MS", "800"))  # then the heuristic covers
+
+# --- Bar-line model (optional; the "music editing" generator) ---
+# Writes a fresh accompaniment line per bar, offered as the "generated"
+# candidate. Prefetched a bar ahead, so its budget is looser.
+BARMODEL_URL = os.environ.get("WM_BARMODEL_URL", "")
+BARMODEL_NAME = os.environ.get("WM_BARMODEL_NAME", "")
+BARMODEL_KEY = os.environ.get("WM_BARMODEL_KEY", "")
+BARMODEL_TIMEOUT_MS = float(os.environ.get("WM_BARMODEL_TIMEOUT_MS", "2000"))

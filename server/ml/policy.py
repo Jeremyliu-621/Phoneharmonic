@@ -22,8 +22,12 @@ from ml.schema import CANDIDATES, DECISION_SCHEMA, Decision, parse_decision, pro
 log = logging.getLogger("policy")
 
 
-def heuristic_decision(gesture: GestureFeatures | None, last_choice: str | None) -> Decision:
-    scores = heuristic.rank(gesture, CANDIDATES)
+def heuristic_decision(gesture: GestureFeatures | None, last_choice: str | None,
+                       candidates: list[str] | None = None) -> Decision:
+    """Rank over `candidates` when given (the bar's actually-available lines —
+    "generated" only exists on bars where the bar model delivered), else the
+    full vocabulary (dataset labeling)."""
+    scores = heuristic.rank(gesture, candidates if candidates is not None else CANDIDATES)
     choice = heuristic.choose(scores, last_choice)
     return Decision(candidate=choice, octave_shift=heuristic.octave_shift(gesture) // 12,
                     source="heuristic")

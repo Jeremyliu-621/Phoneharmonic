@@ -17,9 +17,10 @@ from engine.theory import midi_to_name
 from engine_api import CancelSpec, GestureWindow, NoteEvent, SectionInfo
 from gestures.features import GestureFeatures, extract_features
 from ml import heuristic
+from ml.barmodel import RemoteBarModel, style_for
 from ml.datalog import DecisionLog
 from ml.policy import RemoteModel, heuristic_decision
-from ml.schema import Decision, build_context
+from ml.schema import Decision, build_bar_context, build_context
 from protocol import SECTION_ALL
 
 log = logging.getLogger("engine")
@@ -38,7 +39,8 @@ class Conductor:
         self._last_choice: str | None = None
         self._forced: str | None = None                 # editor override; None = let the ranker choose
         self._model = RemoteModel()                     # trained policy (WM_MODEL_URL); optional
-        self._decision: Decision | None = None          # its active answer, until the next gesture
+        self._barmodel = RemoteBarModel()               # trained line writer (WM_BARMODEL_URL)
+        self._decision: Decision | None = None          # the policy's active answer, until the next gesture
         self._last_source = "heuristic"
         self._datalog = DecisionLog()
         self._sections: list[SectionInfo] = []
@@ -78,7 +80,7 @@ class Conductor:
             "forced": self._forced or "auto",
             "last_choice": self._last_choice,
             "decision_source": self._last_source,
-            "candidates": list(GENERATORS),
+            "candidates": list(GENERATORS) + (["generated"] if self._barmodel.configured else []),
             "gesture": self._gesture.as_dict() if self._gesture else None,
             "song": self.song.name,
             "key_root": self.song.key_root,
@@ -165,11 +167,25 @@ class Conductor:
             if self._decision is not None and self._decision.candidate in cands:
                 decision = self._decision
             else:
-                decision = heuristic_decision(self._gesture, self._last_choice)
+                decision = heuristic_decision(self._gesture, self._last_choice, list(cands))
         self._last_choice = decision.candidate
         self._last_source = decision.source
         self._datalog.decision(bar=idx, song=self.song.name, context=ctx, decision=decision)
         return decision
+
+    def _take_generated(self, idx: int, cands: dict) -> None:
+        """Add the bar model's prefetched line (if one landed for this bar) and
+        kick off the next bar's request — it rides this bar's playing time."""
+        line = self._barmodel.take(idx)
+        if line:
+            cands["generated"] = line
+        if self._barmodel.configured:
+            nxt, prev = self.song.bar(idx + 1), self.song.bar(idx)
+            self._barmodel.prefetch(idx + 1, build_bar_context(
+                key_root=self.song.key_root, bpm=self.bpm,
+                chord_root=nxt.chord_root, chord_minor=nxt.chord_minor,
+                style=style_for(self._gesture),
+                melody=nxt.melody, prev_melody=prev.melody), self.song.key_root)
 
     # --- bar generation ---
     def _bar_events(self, idx: int, bar_start: float) -> list[NoteEvent]:
@@ -178,6 +194,7 @@ class Conductor:
         bar = self.song.bar(idx)
         prev = self.song.bar(idx - 1)
         cands = generate(bar, prev, self.song.key_root)
+        self._take_generated(idx, cands)
 
         decision = self._decide(idx, cands)
         choice, shift = decision.candidate, decision.semitones()
@@ -234,6 +251,7 @@ class Conductor:
         # Gesture/editor layer: a candidate built from the lead, riding on top.
         bar, prev = self.song.bar(idx), self.song.bar(idx - 1)
         cands = generate(bar, prev, self.song.key_root)
+        self._take_generated(idx, cands)
         decision = self._decide(idx, cands)
         choice, shift = decision.candidate, decision.semitones()
         for (on, dur, midi, vel) in cands[choice]:

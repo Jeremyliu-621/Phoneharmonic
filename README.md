@@ -13,9 +13,11 @@ distinct timbres**, a visual **[how-it-works guide](web/guide/)**, and a manual
 **[editor / control room](web/editor/)** (transport, tempo, force-a-candidate,
 assign instruments, **drop a MIDI file** to replace the song), and **MIDI song
 loading** (`mido` parses a dropped `.mid` into tracks/instruments, picks the
-melody, estimates key + per-bar chords), and a **trainable decision policy**
-(every bar's context+decision is logged as training data; a Freesolo-trained
-model drops in behind `WM_MODEL_URL` with the heuristic as instant fallback —
+melody, estimates key + per-bar chords), and **two trainable models** (a
+decision policy behind `WM_MODEL_URL` picking the accompaniment from the
+gesture, and a bar-line generator behind `WM_BARMODEL_URL` writing fresh
+lines as the "generated" candidate — both with instant rule-based fallbacks,
+a local mock endpoint (`server/tools/mock_model.py`), and dataset builders —
 see [`docs/ai-training.md`](docs/ai-training.md)) — all built and headless-tested
 (`server/tools/`: `smoke_test.py`, `gesture_test.py`, `midi_test.py`). Open gate: the two-phone mic skew test
 (§ P1 verification). Research on how others sync audience audio (and the "Waterloo"

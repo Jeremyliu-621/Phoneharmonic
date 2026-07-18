@@ -16,6 +16,7 @@ const INSTRUMENTS = ["violin", "viola", "cello", "flute", "clarinet", "piano", "
 const NICE = {
   auto: "Auto", lower_imitation: "Lower imitation", contrary_motion: "Contrary motion",
   sustained: "Sustained chord", delayed: "Delayed echo", rhythmic_dense: "Rhythmic (busy)", rest: "Rest (silence)",
+  generated: "AI-written line",
 };
 
 let forced = "auto";

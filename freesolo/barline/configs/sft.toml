@@ -1,0 +1,21 @@
+# Freesolo Flash — bar-line model, stage 1: SFT on theory pairs + real MIDI bars.
+#
+# Data:   python server/tools/build_bar_dataset.py [--midi-dir songs/]
+# Quote:  flash train freesolo/barline/configs/sft.toml --cost
+#
+# Generative task, so prefer the 4b over the 2b if the quote allows. No
+# structured_outputs here (SFT rejects it) — rl.toml carries the schema.
+# Reconcile key names and model ids with the `flash env setup` scaffold /
+# freesolo.co/docs/reference/models.
+
+model = "qwen3.5-4b"
+algorithm = "sft"
+
+[train]
+epochs = 2
+max_examples = 50000
+lora_rank = 32
+lora_alpha = 64
+learning_rate = 1e-4
+batch_size = 8
+max_context_tokens = 768

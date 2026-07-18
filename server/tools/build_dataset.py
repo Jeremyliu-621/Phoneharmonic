@@ -11,7 +11,7 @@ TASTE_RULES then overrides labels where your musical judgment disagrees with
 the heuristic — that's where the trained model becomes yours instead of a copy
 of hand-written rules. Edit them freely; they win over both sources.
 
-Output: freesolo/dataset/train.jsonl + eval.jsonl in Freesolo's required
+Output: freesolo/decision/dataset/{train,eval}.jsonl in Freesolo's required
 {"input": ..., "output": ...} row format.
 
 Run:  python server/tools/build_dataset.py [--n 3000] [--seed 7]
@@ -118,7 +118,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--n", type=int, default=3000, help="synthetic rows to generate")
     ap.add_argument("--seed", type=int, default=7)
-    ap.add_argument("--out", default=str(REPO / "freesolo" / "dataset"))
+    ap.add_argument("--out", default=str(REPO / "freesolo" / "decision" / "dataset"))
     args = ap.parse_args()
 
     rng = random.Random(args.seed)
