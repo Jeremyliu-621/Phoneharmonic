@@ -474,10 +474,22 @@ el("tempo").addEventListener("input", (e) => {
 
 // camera hub — MediaPipe is heavy, load only when asked
 el("camstart").addEventListener("click", async () => {
-  if (!camStarted) { el("camframe").src = `../cvwand/?s=${encodeURIComponent(session)}`; camStarted = true; }
-  el("camstart").hidden = true;
+  // Music can start regardless; the camera itself needs a secure page.
   await ensureAudio();
   if (!started) { started = true; conn.send({ t: P.ADMIN_CMD, cmd: "start" }); }
+  if (!window.isSecureContext) {
+    // Plain http on a LAN IP: the browser hides getUserMedia entirely. Steer to
+    // localhost (hosting laptop) — phones keep joining via the IP QR as usual.
+    const local = `http://localhost:${location.port || 80}${location.pathname}${location.search}`;
+    el("camstart").innerHTML =
+      `<div class="big">🔒 Camera needs localhost or HTTPS</div>
+       <div class="sub">On the hosting laptop open
+         <a href="${local}" style="color:var(--gold-hi)">localhost:${location.port || 80}</a>
+         — music still works here, and phones keep using the QR.</div>`;
+    return;
+  }
+  if (!camStarted) { el("camframe").src = `../cvwand/?s=${encodeURIComponent(session)}`; camStarted = true; }
+  el("camstart").hidden = true;
 });
 
 // header Join button re-opens the QR card even with phones present

@@ -51,6 +51,15 @@ const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 el("start").addEventListener("click", async () => {
   el("start").style.display = "none";
   el("loading").style.display = "block";
+  // Browsers only expose the camera on secure pages (localhost or https) —
+  // over plain http on a LAN IP, navigator.mediaDevices simply doesn't exist.
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    el("loading").innerHTML =
+      "🔒 the camera only works on a secure page<br>" +
+      `on the laptop open <b>http://localhost:${location.port || 80}</b>` +
+      `<br>(or https://${location.hostname}:8443 after trusting the cert)`;
+    return;
+  }
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } }, audio: false,
