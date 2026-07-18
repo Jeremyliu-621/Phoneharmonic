@@ -225,7 +225,6 @@ function setAim(key) {
 function renderRoster(m) {
   sections = (m.sections || []).filter((s) => s.connected);
   el("pcount").textContent = sections.length;
-  el("devcell").textContent = sections.length;
   const w = m.wand || {};
   el("wanddot").classList.toggle("ok", !!w.connected);
   el("wandvar").textContent = w.connected ? w.variant : "—";
