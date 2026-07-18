@@ -67,9 +67,13 @@ el("start").addEventListener("click", async () => {
 });
 el("stop").addEventListener("click", () => conn.send({ t: P.ADMIN_CMD, cmd: "stop" }));
 
-let barCount = 0;
+let barCount = 0, barStart = 0, barMs = 2400;
 conn.on(P.CLOCK_PONG, (m) => clock.handlePong(m));
 conn.on(P.SCHED_NOTES, (m) => {
+  if (m.events.length > 2) {                 // a bar batch: anchor the progress bar
+    barStart = Math.min(...m.events.map((e) => e.at));
+    if (lastState.bpm) barMs = 60000 / lastState.bpm * 4;
+  }
   let n = 0;
   for (const e of m.events) {
     // Test page is the whole orchestra; the melody rides at exactly vel 0.9.
@@ -116,6 +120,16 @@ function renderMeta() {
 setInterval(() => {
   if (clock.theta !== null) conn.send({ t: P.CLOCK_REPORT, theta: clock.theta, rtt: clock.rtt });
 }, 2000);
+
+(function barTick() {                         // when the bar fills, the next decision lands
+  if (barStart && clock.theta !== null) {
+    const p = ((clock.serverNow() - barStart) % barMs) / barMs;
+    el("barpos").style.width = `${Math.max(0, Math.min(100, p * 100))}%`;
+    el("barcap").textContent = "instant sting fires right away · rhythm changes in " +
+      `${((1 - p) * barMs / 1000).toFixed(1)}s (the next bar line)`;
+  }
+  requestAnimationFrame(barTick);
+})();
 
 conn.onOpen((w) => { clock.checkEpoch(w.server_time); log("connected"); });
 conn.onClose(() => log("reconnecting…"));
