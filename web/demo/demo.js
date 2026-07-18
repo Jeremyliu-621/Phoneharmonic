@@ -35,6 +35,10 @@ el("start").addEventListener("click", async () => {
 el("stop").addEventListener("click", () => conn.send({ t: P.ADMIN_CMD, cmd: "stop" }));
 
 // --- 2: songs ---------------------------------------------------------------
+el("song-zelda").addEventListener("click", () => {
+  conn.send({ t: P.SONG_FILE, name: "zelda-fairy.mid" });
+  log("loading Great Fairy Fountain…");
+});
 el("song-canon").addEventListener("click", () => {
   conn.send({ t: P.SONG_FILE, name: "canon.mid" });
   log("loading Canon in D…");
