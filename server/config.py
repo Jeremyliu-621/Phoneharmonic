@@ -64,6 +64,9 @@ ANNOUNCER_VOICE = os.environ.get("WM_ANNOUNCER_VOICE", "")
 
 # --- Session persistence (instruments/placement survive a server restart) ---
 SESSION_FILE = pathlib.Path(os.environ.get("WM_SESSION_FILE", str(SERVER_DIR / "session.json")))
+# Last loaded/edited song, restored on boot — a restart must never silently
+# revert the show to the built-in loop.
+SONG_CACHE = pathlib.Path(os.environ.get("WM_SONG_CACHE", str(SERVER_DIR / "data" / "last_song")))
 
 # --- Decision model (optional; unset = heuristic ranker only) ---
 # Any OpenAI-compatible serving base works, e.g. a Freesolo deploy:

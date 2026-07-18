@@ -38,6 +38,7 @@ from config import (
     PROTOCOL_VERSION,
     SECTION_GRACE_S,
     SESSION_FILE,
+    SONG_CACHE,
     WS_PATH,
 )
 from engine.candidates import GENERATORS
@@ -110,6 +111,7 @@ class App:
         self.session = SessionState(name=DEFAULT_SESSION)
         self._load_session()
         self.engine = Conductor()
+        self._restore_song()
         self.recorder = GestureRecorder(DEFAULT_SESSION)
         self.wand = WandRouter(self.engine, recorder=self.recorder)
         self.scheduler = Scheduler(self.engine, self.hub)
@@ -141,6 +143,50 @@ class App:
             SESSION_FILE.write_text(json.dumps(self.session.to_dict(), indent=2), encoding="utf-8")
         except OSError as e:
             log.warning("session save failed: %s", e)
+
+    # --- song persistence: a restart must never silently revert the show to
+    # the built-in loop (which also mutes the camera's "what you did" flashes,
+    # since only real songs engage the arrangement devices). ---
+    def _save_song_cache(self, mid_bytes: bytes | None = None, name: str = "",
+                         grid: dict | None = None) -> None:
+        try:
+            SONG_CACHE.parent.mkdir(parents=True, exist_ok=True)
+            if mid_bytes is not None:
+                SONG_CACHE.with_suffix(".mid").write_bytes(mid_bytes)
+                SONG_CACHE.with_suffix(".meta.json").write_text(
+                    json.dumps({"name": name}), encoding="utf-8")
+                SONG_CACHE.with_suffix(".grid.json").unlink(missing_ok=True)
+            elif grid is not None:
+                SONG_CACHE.with_suffix(".grid.json").write_text(
+                    json.dumps(grid), encoding="utf-8")
+        except OSError as e:
+            log.warning("song cache save failed: %s", e)
+
+    def _restore_song(self) -> None:
+        """On boot, reload whichever landed last: the dropped MIDI or an edit."""
+        try:
+            mid, grid = SONG_CACHE.with_suffix(".mid"), SONG_CACHE.with_suffix(".grid.json")
+            pick = max((p for p in (mid, grid) if p.exists()),
+                       key=lambda p: p.stat().st_mtime, default=None)
+            if pick is None:
+                return
+            if pick == grid:
+                from engine.midi_load import build_song_from_grid
+                g = json.loads(grid.read_text(encoding="utf-8"))
+                song, tracks = build_song_from_grid(g.get("parts") or [],
+                                                    float(g.get("bpm") or 100),
+                                                    g.get("name") or "edited")
+            else:
+                from engine.midi_load import load_midi_bytes
+                meta = SONG_CACHE.with_suffix(".meta.json")
+                nm = (json.loads(meta.read_text(encoding="utf-8")).get("name", "restored.mid")
+                      if meta.exists() else "restored.mid")
+                song, tracks = load_midi_bytes(mid.read_bytes(), nm)
+            self.engine.load_song(song, tracks)
+            log.info("restored last song '%s' (%d bars, %d parts)",
+                     song.name, len(song.bars), len(tracks))
+        except Exception as e:  # noqa: BLE001 - a bad cache must never block boot
+            log.warning("song restore failed (%s) — starting with the built-in loop", e)
 
     async def prune_loop(self) -> None:
         """Drop section slots that have been disconnected past the grace period,
@@ -508,6 +554,7 @@ class App:
             # tick or clock pongs mid-performance.
             song, tracks = await asyncio.to_thread(load_midi_bytes, data, name)
             self.engine.load_song(song, tracks)
+            self._save_song_cache(mid_bytes=data, name=name)
             log.info("song loaded: %s (%d bars, %d parts)", song.name, len(song.bars), len(tracks))
             self.showlog.record("song.load", name=song.name, bars=len(song.bars), parts=len(tracks))
             self.announcer.poke("song.load",
@@ -532,6 +579,7 @@ class App:
             name = song_json.get("name") or "edited"
             song, tracks = build_song_from_grid(parts, bpm, name)
             self.engine.update_song(song, tracks, reanchor=False)
+            self._save_song_cache(grid={"name": name, "bpm": bpm, "parts": parts})
             log.info("song edited: %s (%d bars, %d parts)", song.name, len(song.bars), len(tracks))
             await self._sync_instruments_to_song()
         except Exception as e:  # noqa: BLE001 - report bad edits back to the editor

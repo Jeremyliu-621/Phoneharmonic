@@ -439,6 +439,10 @@ class Conductor:
         if climax:                               # the arc lands: a crash on the downbeat
             events.append(self._note(SECTION_ALL, bar_start, self.s16_ms * 2, 49, 0.95, "drum"))
 
+        # Free-play reports its device too, so the camera flash always has the
+        # truth to show — including a REAL octave shift when one was applied.
+        self._device = choice if abs(shift) < 12 else \
+            f"{choice} · octave {'up' if shift > 0 else 'down'}"
         log.info("bar %d -> %s [%s] (%d notes, shift %+d, %d sections)",
                  idx, choice, decision.source, len(responder), shift, n)
         return events
