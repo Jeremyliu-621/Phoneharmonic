@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b0d12">
+  <title>Wand Maestro — Editor</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: ui-monospace, "Courier New", monospace; color: #f4e9d6; padding: 1.5rem; max-width: 920px; margin: 0 auto;
+      background: radial-gradient(circle at 50% -10%, #1a1206, #05060a 55%) fixed; min-height: 100vh; }
+    img { image-rendering: pixelated; }
+    h1 { font-size: 1.3rem; color: #ffd76a; letter-spacing: 0.04em; } .muted { opacity: 0.55; }
+    a { color: #ffca6b; }
+    .card { background: #140f0a; border: 1px solid #3a2c1a; border-radius: 14px; padding: 1.1rem 1.25rem; margin-top: 1rem; }
+    .card h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; color: #ffd76a; opacity: 0.85; margin-bottom: 0.8rem; }
+    .row { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
+    button { font: 700 13px ui-monospace, monospace; padding: 0.55rem 0.95rem; border: 0; border-radius: 6px; background: #2a2016; color: #f4e9d6; cursor: pointer; }
+    button:active { transform: translateY(1px); }
+    button.go { background: #ffd76a; color: #1a120a; } button.stop { background: #e5686a; color: #fff; }
+    button.active { outline: 2px solid #ffd76a; background: #3a2c15; color: #ffe9a8; }
+    .chip { font: 700 13px ui-monospace, monospace; padding: 0.5rem 0.85rem; border-radius: 999px; background: #241a10; border: 1px solid #3a2c1a; cursor: pointer; }
+    .chip.active { background: #ffd76a; color: #1a120a; border-color: #ffd76a; }
+    label.k { font-size: 13px; opacity: 0.6; }
+    input[type=range] { flex: 1; min-width: 140px; accent-color: #ffd76a; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 0.5rem; }
+    th, td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid #3a2c1a; }
+    th { opacity: 0.5; font-weight: 500; }
+    select { background: #100b07; color: #f4e9d6; border: 1px solid #3a2c1a; border-radius: 6px; padding: 0.3rem 0.5rem; font-family: inherit; }
+    .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #e5484d; }
+    .dot.ok { background: #46d17a; }
+    .big { font-size: 1.4rem; font-weight: 800; color: #ffd76a; }
+    .stat { display: inline-flex; flex-direction: column; margin-right: 1.5rem; }
+    .stat .k { font-size: 11px; opacity: 0.5; text-transform: uppercase; }
+    #bars { display: flex; gap: 3px; height: 26px; align-items: flex-end; margin-top: 0.5rem; }
+    #bars .b { flex: 1; background: #ffd76a; border-radius: 2px 2px 0 0; height: 4px; transition: height 0.2s; }
+  </style>
+</head>
+<body>
+  <h1>Wand Maestro <span class="muted">· editor / control room</span></h1>
+  <div class="muted" id="status">connecting…</div>
+  <div class="muted" style="margin-top:0.25rem">
+    audience view: <a href="../stage/" target="_blank">stage →</a> ·
+    how it works: <a href="../guide/" target="_blank">guide →</a>
+  </div>
+
+  <div class="card">
+    <h2>Transport</h2>
+    <div class="row">
+      <button class="go" id="enable">🔊 Enable monitor + Start</button>
+      <button class="stop" id="stop">■ Stop</button>
+      <button id="panic">All notes off</button>
+      <span class="stat"><span class="k">now playing</span><span class="big" id="nowplaying">—</span></span>
+    </div>
+    <div class="row" style="margin-top:0.9rem">
+      <label class="k">tempo</label>
+      <input type="range" id="tempo" min="60" max="180" step="1" value="100">
+      <span id="tempoval">100 BPM</span>
+    </div>
+    <div id="bars"></div>
+  </div>
+
+  <div class="card">
+    <h2>Accompaniment — manual override (no wand / no ML needed)</h2>
+    <div class="muted" style="margin-bottom:0.6rem">Pick <b>Auto</b> to let gestures/ranker choose, or force one to test it.</div>
+    <div class="row" id="candidates"></div>
+  </div>
+
+  <div class="card">
+    <h2>Instruments</h2>
+    <div class="muted" id="secnote">Each phone that joins is one instrument. Assign its sound here.</div>
+    <table>
+      <thead><tr><th></th><th>section</th><th>instrument</th><th>ready</th><th>θ offset</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>Live gesture (from a connected wand)</h2>
+    <div class="row">
+      <span class="stat"><span class="k">wand</span><span><span class="dot" id="wanddot"></span> <span id="wandstate">none</span></span></span>
+      <span class="stat"><span class="k">energy</span><span id="g_energy">—</span></span>
+      <span class="stat"><span class="k">size</span><span id="g_size">—</span></span>
+      <span class="stat"><span class="k">vertical</span><span id="g_vertical">—</span></span>
+      <span class="stat"><span class="k">rotation</span><span id="g_rotation">—</span></span>
+    </div>
+  </div>
+
+  <script type="module" src="./editor.js"></script>
+</body>
+</html>

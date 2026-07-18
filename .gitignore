@@ -1,0 +1,29 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Certs (mkcert output — regenerate locally, never commit)
+certs/
+
+# Runtime state
+server/session.json
+server/tools/*.log
+*.log
+server/data/prefs/
+server/data/gestures/
+server/data/models/*.pkl
+
+# Firmware secrets
+firmware/wand/config.h
+
+# Retro Diffusion API token (secret — never commit; read by server/tools/gen_assets.py)
+server/tools/rd_token.txt
+.env
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

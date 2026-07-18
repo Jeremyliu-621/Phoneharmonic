@@ -1,0 +1,10 @@
+# Realtime layer (P0/P1) — the only hard dependency for the metronome risk-killer
+websockets>=16,<17
+
+# Music engine + ML (added as those phases land: P1-parallel onward)
+# pretty_midi
+# mido
+# numpy
+# scipy
+# scikit-learn
+# dtaidistance

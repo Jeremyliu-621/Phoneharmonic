@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <meta name="theme-color" content="#0b0d12">
+  <title>Wand Maestro — Section</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    html, body { height: 100%; font-family: system-ui, sans-serif; background: #0b0d12; color: #e8ecf4; overflow: hidden; }
+    #join {
+      position: fixed; inset: 0; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 1rem;
+      background: radial-gradient(circle at 50% 40%, #1a2740, #0b0d12); cursor: pointer;
+    }
+    #join h1 { font-size: clamp(2rem, 12vw, 4rem); font-weight: 800; letter-spacing: -0.03em; }
+    #join p { opacity: 0.6; font-size: 1rem; }
+    #stage { position: fixed; inset: 0; display: none; flex-direction: column; }
+    #pulse { flex: 1; display: flex; align-items: center; justify-content: center;
+             font-size: clamp(3rem, 20vw, 8rem); font-weight: 800; transition: background 60ms ease-out; }
+    #hud { padding: 0.75rem 1rem; font: 12px ui-monospace, monospace; background: #05070b;
+           display: grid; grid-template-columns: 1fr 1fr; gap: 0.25rem 1rem; }
+    #hud .k { opacity: 0.5; }
+    #hud .full { grid-column: 1 / -1; }
+    #trimrow { display: flex; align-items: center; gap: 0.5rem; }
+    #trimrow input { flex: 1; }
+    .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #e5484d; }
+    .dot.ok { background: #46d17a; }
+  </style>
+</head>
+<body>
+  <div id="join">
+    <h1>TAP TO JOIN</h1>
+    <p id="joinsub">the orchestra</p>
+  </div>
+
+  <div id="stage">
+    <div id="pulse">—</div>
+    <div id="hud">
+      <div class="full"><span class="dot" id="dot"></span> <span id="sid">connecting…</span></div>
+      <div><span class="k">θ offset</span> <span id="theta">—</span></div>
+      <div><span class="k">rtt</span> <span id="rtt">—</span></div>
+      <div><span class="k">notes</span> <span id="clicks">0</span></div>
+      <div><span class="k">last</span> <span id="last">—</span></div>
+      <div class="full" id="trimrow">
+        <span class="k">trim</span>
+        <input type="range" id="trim" min="-100" max="100" value="0" step="1">
+        <span id="trimval">0ms</span>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="./section.js"></script>
+</body>
+</html>

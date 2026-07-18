@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Wand Maestro — CV Wand</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    html, body { height: 100%; font-family: system-ui, sans-serif; background: #07090e; color: #e8ecf4; overflow: hidden; }
+    #wrap { position: fixed; inset: 0; display: flex; flex-direction: column; }
+    #view { position: relative; flex: 1; background: #000; overflow: hidden; }
+    #video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; visibility: hidden; }
+    #canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+    #start {
+      position: absolute; inset: 0; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 0.75rem; cursor: pointer;
+      background: radial-gradient(circle at 50% 40%, #182a44, #07090e); z-index: 5;
+    }
+    #start h1 { font-size: clamp(1.8rem, 8vw, 3rem); font-weight: 800; letter-spacing: -0.02em; }
+    #start p { opacity: 0.6; max-width: 32ch; text-align: center; line-height: 1.4; }
+    #loading { position: absolute; top: 1rem; left: 50%; transform: translateX(-50%);
+               background: #0009; padding: 0.4rem 0.9rem; border-radius: 999px; font: 13px ui-monospace, monospace; z-index: 4; }
+    #hud { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.25rem 1rem;
+           padding: 0.6rem 1rem; background: #05070b; font: 12px ui-monospace, monospace; }
+    #hud .k { opacity: 0.5; }
+    #hud .grabbed { color: #46d17a; font-weight: 700; }
+    #controls { display: flex; gap: 0.5rem; padding: 0.5rem 1rem 0.9rem; background: #05070b; }
+    #controls button { flex: 1; font: 600 14px system-ui; padding: 0.7rem 0.5rem; border: 0;
+                       border-radius: 8px; background: #2a3550; color: #e8ecf4; cursor: pointer; }
+    #controls button:active { transform: translateY(1px); }
+    #controls .up { background: #2f8f56; } #controls .down { background: #8f3030; }
+    .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #e5484d; }
+    .dot.ok { background: #46d17a; }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <div id="view">
+      <video id="video" playsinline muted></video>
+      <canvas id="canvas"></canvas>
+      <div id="loading" style="display:none">loading hand tracker…</div>
+      <div id="start">
+        <h1>🪄 CV Wand</h1>
+        <p>Uses your webcam to track your hand. <b>Pinch</b> (thumb + index) to “grab” the music, move to conduct, release to let go.</p>
+        <p style="opacity:0.9"><b>Tap to start camera</b></p>
+      </div>
+    </div>
+
+    <div id="hud">
+      <div><span class="k">conn</span> <span class="dot" id="dot"></span> <span id="variant">cv</span></div>
+      <div><span class="k">state</span> <span id="grabstate">open</span></div>
+      <div><span class="k">pinch</span> <span id="pinch">—</span></div>
+      <div><span class="k">fps</span> <span id="fps">—</span></div>
+    </div>
+
+    <div id="controls">
+      <button class="up" id="thumbup">👍 good</button>
+      <button class="down" id="thumbdown">👎 no</button>
+      <button id="recal">🎯 aim@laptop</button>
+      <button id="cycle">↻ section</button>
+    </div>
+  </div>
+
+  <script type="module" src="./cvwand.js"></script>
+</body>
+</html>

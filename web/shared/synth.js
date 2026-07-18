@@ -1,0 +1,111 @@
+// Shared WebAudio synth. Turns scheduled NoteEvents into oscillator voices,
+// timed against the synced clock so every device plays in agreement. Used by
+// the section pages and by the stage (which plays the orchestra when it's the
+// only audio device).
+
+const SEMI = { C: 0, "C#": 1, D: 2, "D#": 3, E: 4, F: 5, "F#": 6, G: 7, "G#": 8, A: 9, "A#": 10, B: 11 };
+
+function noteToFreq(note) {
+  const m = /^([A-G]#?)(-?\d+)$/.exec(note);
+  if (!m) return 440;
+  const midi = (parseInt(m[2], 10) + 1) * 12 + SEMI[m[1]];
+  return 440 * Math.pow(2, (midi - 69) / 12);
+}
+
+// Rough instrument timbres: {oscillator wave, lowpass cutoff Hz}. Enough to make
+// a violin, cello, flute etc. read as distinct without samples.
+const TIMBRES = {
+  violin: { wave: "sawtooth", cutoff: 3200 },
+  cello:  { wave: "sawtooth", cutoff: 1400 },
+  viola:  { wave: "sawtooth", cutoff: 2200 },
+  flute:  { wave: "sine",     cutoff: 6000 },
+  clarinet:{ wave: "square",  cutoff: 2000 },
+  piano:  { wave: "triangle", cutoff: 5000 },
+  bass:   { wave: "triangle", cutoff: 600 },
+  synth:  { wave: "triangle", cutoff: 4000 },
+  bell:   { wave: "sine",     cutoff: 8000 },
+};
+
+export class Synth {
+  // clock: a Clock instance; onPlay(ev, peak): optional visual callback fired at play time.
+  constructor(clock, onPlay = null) {
+    this.clock = clock;
+    this.onPlay = onPlay;
+    this.ctx = null;
+    this.master = null;
+    this.scheduled = [];
+    this.timbre = null;   // set via setInstrument; null => waveform from articulation
+  }
+
+  setInstrument(name) {
+    this.timbre = TIMBRES[name] || null;
+  }
+
+  // Must be called inside a user gesture (autoplay policy).
+  async unlock() {
+    this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    await this.ctx.resume();
+    this.master = this.ctx.createGain();
+    this.master.gain.value = 0.22;          // headroom so stacked notes don't clip
+    this.master.connect(this.ctx.destination);
+    // Silent one-sample buffer so iOS marks the context "running".
+    const buf = this.ctx.createBuffer(1, 1, this.ctx.sampleRate);
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(this.ctx.destination);
+    src.start(0);
+    return this.ctx;
+  }
+
+  // ev = {at (server ms), dur (ms), note, vel, art}
+  schedule(ev) {
+    if (!this.ctx) return;
+    const when = this.clock.serverToAudioTime(ev.at);
+    if (when === null) return;
+    const now = this.ctx.currentTime;
+    if (when < now - 0.05) return;          // hopelessly late — drop
+    const t = Math.max(when, now + 0.001);
+    const durSec = Math.max(0.08, (ev.dur || 200) / 1000);
+    const sustain = ev.art === "sustain";
+    const peak = Math.max(0.05, ev.vel || 0.7);
+
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = this.timbre ? this.timbre.wave : (sustain ? "sine" : "triangle");
+    osc.frequency.value = noteToFreq(ev.note);
+    if (this.timbre) {
+      const lp = this.ctx.createBiquadFilter();
+      lp.type = "lowpass";
+      lp.frequency.value = this.timbre.cutoff;
+      osc.connect(lp).connect(g).connect(this.master);
+    } else {
+      osc.connect(g).connect(this.master);
+    }
+
+    const atk = sustain ? 0.03 : 0.005;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(peak, t + atk);
+    if (sustain) {
+      g.gain.setValueAtTime(peak, t + Math.max(atk, durSec - 0.15));
+    }
+    g.gain.exponentialRampToValueAtTime(0.0001, t + durSec);
+    osc.start(t);
+    osc.stop(t + durSec + 0.03);
+    this.scheduled.push(osc);
+    osc.onended = () => {
+      const i = this.scheduled.indexOf(osc);
+      if (i >= 0) this.scheduled.splice(i, 1);
+    };
+
+    if (this.onPlay) {
+      const delay = ev.at - this.clock.serverNow();
+      setTimeout(() => this.onPlay(ev, peak), Math.max(0, delay));
+    }
+  }
+
+  panic() {
+    while (this.scheduled.length) {
+      try { this.scheduled.pop().stop(); } catch {}
+    }
+  }
+}
