@@ -144,6 +144,13 @@ class App:
 
     async def _on_hello(self, ws: ServerConnection, hello: dict, role: str) -> ClientConn:
         client_id = hello.get("client_id") or uuid.uuid4().hex
+        # A reconnect while the previous socket is still lingering (phone woke up
+        # before the server's ping timeout noticed the old one died): close the
+        # zombie now. Its disconnect handler no-ops thanks to the identity guard.
+        stale = self.hub.get(client_id)
+        if stale is not None and stale.ws is not ws:
+            log.info("closing stale socket for %s (reconnect)", client_id[:8])
+            asyncio.create_task(self._close_quietly(stale.ws))
         conn = ClientConn(client_id=client_id, role=role, ws=ws, name=hello.get("name", ""))
         self.hub.register(conn)
 
@@ -386,8 +393,21 @@ class App:
         if sec and not sec.connected:
             await self._remove_section(section_id, f"grace {SECTION_GRACE_S:.0f}s expired")
 
+    @staticmethod
+    async def _close_quietly(ws: ServerConnection) -> None:
+        try:
+            await ws.close()
+        except Exception:  # noqa: BLE001
+            pass
+
     async def _on_disconnect(self, conn: ClientConn) -> None:
-        self.hub.unregister(conn.client_id)
+        # Identity guard: if this client_id already reconnected on a NEWER socket,
+        # this is just the zombie dying — touching the roster/section state here
+        # would silence the live connection (the "one phone stops playing" bug).
+        if self.hub.get(conn.client_id) is not conn:
+            log.info("stale socket for %s closed; newer connection lives on", conn.client_id[:8])
+            return
+        self.hub.unregister(conn.client_id, conn)
         if conn.role == "section" and conn.section_id in self.session.sections:
             # Keep the slot (instrument/placement) for a grace period so a
             # screen-off phone rebinds as itself; reap it if it never returns.
@@ -395,7 +415,7 @@ class App:
             self.session.sections[conn.section_id].ready = False
             self.engine.on_sections_changed(self.session.engine_sections())
             asyncio.create_task(self._reap_later(conn.section_id))
-        elif conn.role in ("wand", "wand-sim"):
+        elif conn.role in P.WAND_ROLES:
             self.session.wand = WandSlot()
         await self._broadcast_roster()
 
