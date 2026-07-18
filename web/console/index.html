@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0c0608">
+  <title>Wand Maestro — Console</title>
+  <style>
+    /* One warm design language: deep crimson + antique gold, display serif for
+       titles, clean sans for the console chrome, mono for numbers. The whole
+       screen is a workstation: score on the left, the live camera-wand in the
+       middle with each phone connecting to it, gesture/wand on the right, and a
+       live piano roll along the bottom. */
+    :root {
+      --serif: "Cinzel", "Bodoni MT", "Didot", "Playfair Display", Georgia, serif;
+      --sans: "Segoe UI", system-ui, -apple-system, sans-serif;
+      --mono: ui-monospace, "Cascadia Code", "Courier New", monospace;
+      --gold: #e7c583; --gold-hi: #ffe3a3; --gold-dim: #b9903f;
+      --wine: #2a0d12; --wine-2: #1b0709; --cream: #f6e7c9; --ink: #140a0c;
+      --line: rgba(183,144,63,.28);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+    body { font-family: var(--sans); color: var(--cream); overflow: hidden;
+      background: radial-gradient(130% 100% at 50% -10%, #34101a, #0a0507 60%) fixed;
+      display: grid; grid-template-rows: auto 1fr; height: 100vh; }
+
+    /* ── header / transport ── */
+    #top { display: flex; align-items: center; gap: 1.1rem; padding: .55rem 1rem;
+      border-bottom: 1px solid var(--line); background: linear-gradient(#1c0a0eaa, #12070900); }
+    #top h1 { font: 700 1.15rem/1 var(--serif); letter-spacing: .12em; color: var(--gold-hi);
+      text-shadow: 0 0 10px rgba(255,178,76,.4); white-space: nowrap; }
+    #top .grp { display: flex; align-items: center; gap: .45rem; }
+    #top .sp { flex: 1; }
+    .tbtn { cursor: pointer; font: 700 .82rem var(--sans); color: #24120a; border: 0; border-radius: 5px;
+      padding: .42rem .8rem; background: linear-gradient(#ffe3a3, #e0b45c);
+      box-shadow: inset 0 -2px 0 rgba(120,70,10,.35); }
+    .tbtn.stop { background: linear-gradient(#f0a0a0, #d76a6a); color: #3a0d0d; }
+    .tbtn.warn { background: linear-gradient(#f2c983, #e0a54a); }
+    .tbtn.ghost { background: transparent; color: var(--gold); border: 1px solid var(--gold-dim);
+      box-shadow: none; text-decoration: none; }
+    .tbtn.ghost:hover { color: var(--gold-hi); border-color: var(--gold); }
+    #tempo { accent-color: var(--gold); width: 108px; }
+    .kv { font: .74rem/1 var(--sans); color: #c9a06a; }
+    .kv b { font-family: var(--mono); color: var(--cream); font-weight: 400; }
+    .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #b5484d;
+      box-shadow: 0 0 5px rgba(181,72,77,.7); vertical-align: middle; }
+    .dot.ok { background: #6cc98a; box-shadow: 0 0 6px rgba(108,201,138,.8); }
+
+    /* ── main 3-column grid + bottom roll ── */
+    #main { display: grid; grid-template-columns: 250px 1fr 300px; grid-template-rows: 1fr 122px;
+      grid-template-areas: "left center right" "roll roll roll"; min-height: 0; }
+    .col { min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+    #left { grid-area: left; border-right: 1px solid var(--line); }
+    #center { grid-area: center; }
+    #right { grid-area: right; border-left: 1px solid var(--line); }
+    #rollwrap { grid-area: roll; border-top: 1px solid var(--line); position: relative;
+      background: linear-gradient(180deg, #0e0709, #0a0506); }
+
+    .panel-h { font: 700 .68rem var(--sans); letter-spacing: .16em; text-transform: uppercase;
+      color: var(--gold-dim); padding: .55rem .8rem .4rem; display: flex; justify-content: space-between; }
+    .scroll { overflow-y: auto; flex: 1; min-height: 0; }
+    .scroll::-webkit-scrollbar { width: 8px; }
+    .scroll::-webkit-scrollbar-thumb { background: #3a1720; border-radius: 4px; }
+
+    /* ── left: score lanes ── */
+    .lane { padding: .1rem .5rem .3rem; }
+    .lane .lbl { font: .68rem var(--mono); color: var(--gold); display: flex; justify-content: space-between;
+      padding: 2px 2px 1px; }
+    .lane .lbl .n { color: #c9a06a; }
+    .lane.melody .lbl { color: var(--gold-hi); }
+    .lane canvas { width: 100%; height: 34px; display: block; border-radius: 3px;
+      background: #140a0d; border: 1px solid rgba(74,37,48,.6); }
+    #leftempty { padding: 1rem .8rem; color: var(--gold-dim); font-size: .82rem; line-height: 1.5; }
+
+    /* ── center: camera + phones ── */
+    #cambox { position: relative; margin: .5rem .6rem 0; border-radius: 8px; overflow: hidden;
+      border: 1px solid var(--gold-dim); background: #000; flex: 3 1 0; min-height: 170px; }
+    #center .scroll#phones { flex: 2 1 0; }
+    #camframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+    #camstart { position: absolute; inset: 0; display: flex; flex-direction: column; gap: .5rem;
+      align-items: center; justify-content: center; cursor: pointer; text-align: center;
+      background: radial-gradient(ellipse at 50% 40%, #3a1016ee, #0c0608f5); z-index: 3; }
+    #camstart .big { font: 700 1.1rem var(--serif); color: var(--gold-hi); letter-spacing: .05em; }
+    #camstart .sub { font-size: .78rem; color: #d8b98a; max-width: 24ch; line-height: 1.4; }
+    #camstart .go { margin-top: .3rem; padding: .5rem 1.1rem; border-radius: 6px; color: #24120a;
+      font: 700 .9rem var(--serif); background: linear-gradient(#ffe3a3, #e0b45c); }
+    #dots { position: absolute; left: 0; right: 0; bottom: 4px; height: 42px; z-index: 2; pointer-events: none; }
+    .pdot { position: absolute; bottom: 0; transform: translateX(-50%); text-align: center; transition: transform .12s; }
+    .pdot .c { width: 15px; height: 15px; border-radius: 50%; margin: 0 auto; border: 2px solid #0a0506;
+      box-shadow: 0 0 0 1px rgba(0,0,0,.6); }
+    .pdot .t { font: .58rem var(--mono); color: var(--cream); text-shadow: 0 1px 2px #000; margin-top: 1px; }
+    .pdot.hit { transform: translateX(-50%) translateY(-6px) scale(1.25); }
+
+    #phones { }
+    .prow { display: flex; align-items: center; gap: .5rem; padding: .38rem .7rem;
+      border-bottom: 1px solid rgba(74,37,48,.5); font-size: .82rem; }
+    .prow .sw { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+    .prow .id { font-family: var(--mono); color: var(--gold); width: 2.2em; }
+    .prow .inst { flex: 1; color: var(--cream); text-transform: capitalize; }
+    .prow.hit { background: rgba(231,197,131,.10); }
+    .prow .sync { font: .68rem var(--mono); color: #6cc98a; }
+    .prow .sync.wait { color: #d79a3d; }
+    .prow .off { color: #b5484d; }
+    .prow .mut { color: #b98c6a; font-size: .72rem; }
+    #phonesempty { padding: .8rem .7rem; color: var(--gold-dim); font-size: .8rem; line-height: 1.5; }
+
+    /* ── right: gesture + wand ── */
+    #right .body { padding: .3rem .8rem .8rem; overflow-y: auto; }
+    .wandcard { display: flex; align-items: center; gap: .55rem; padding: .5rem .1rem .7rem;
+      border-bottom: 1px solid var(--line); margin-bottom: .6rem; }
+    .wandcard .ico { font-size: 1.5rem; filter: grayscale(1) opacity(.5); transition: filter .2s, transform .2s; }
+    .wandcard.live .ico { filter: none; transform: scale(1.08); }
+    .wandcard .st b { color: var(--gold-hi); } .wandcard .st { font-size: .82rem; color: #c9a06a; }
+    .gbar { margin: .5rem 0; }
+    .gbar .lbl { display: flex; justify-content: space-between; font: .72rem var(--sans); color: #c9a06a; margin-bottom: 3px; }
+    .gbar .lbl b { font-family: var(--mono); color: var(--cream); font-weight: 400; }
+    .gbar .track { height: 8px; border-radius: 4px; background: #200d12; overflow: hidden;
+      border: 1px solid rgba(74,37,48,.7); }
+    .gbar .fill { height: 100%; width: 0; border-radius: 4px; transition: width .18s ease-out;
+      background: linear-gradient(90deg, #b9903f, #ffe3a3); }
+    .gbar.vert .fill { background: linear-gradient(90deg, #7fd1ff, #ffe3a3); }
+    #action { margin-top: .8rem; padding: .7rem .6rem; border-radius: 8px; text-align: center;
+      border: 1px solid var(--line); background: rgba(42,13,18,.5); }
+    #action .did { font: .66rem var(--sans); letter-spacing: .14em; text-transform: uppercase; color: var(--gold-dim); }
+    #action .what { font: 700 1.15rem var(--serif); color: var(--gold-hi); margin-top: .2rem;
+      text-shadow: 0 0 12px rgba(255,178,76,.4); transition: opacity .2s; }
+    #action .oct { display: block; font-size: .8rem; color: #7fd1ff; margin-top: .1rem; }
+
+    /* ── bottom roll ── */
+    #rollcanvas { width: 100%; height: 100%; display: block; }
+    #nowplaying { position: absolute; left: 12px; top: 6px; font: 600 .78rem var(--sans); color: #c9a06a;
+      text-shadow: 0 1px 3px #000; pointer-events: none; }
+    #nowplaying b { color: var(--gold-hi); }
+    #rolltag { position: absolute; right: 12px; top: 6px; font: 700 .62rem var(--mono); color: var(--gold-dim);
+      letter-spacing: .12em; text-transform: uppercase; pointer-events: none; }
+
+    /* join popover */
+    #qrpop { position: fixed; right: 14px; top: 52px; z-index: 40; padding: .8rem; text-align: center;
+      background: linear-gradient(#2a0d12f2, #180709f2); border: 1px solid var(--gold-dim); border-radius: 8px;
+      box-shadow: 0 10px 30px rgba(0,0,0,.6); }
+    #qrpop .lbl { font: 700 .7rem var(--serif); letter-spacing: .14em; color: var(--gold-hi); margin-bottom: .5rem; }
+    #qr { width: 150px; height: 150px; background: #fdf6e6; padding: 6px; border-radius: 4px; }
+    #qr svg { width: 100%; height: 100%; display: block; }
+    #qrpop .sub { margin-top: .5rem; font-size: .72rem; color: #d8b98a; max-width: 18ch; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <div id="top">
+    <h1>♪ Wand Maestro</h1>
+    <div class="grp">
+      <button class="tbtn" id="start" title="start / resume">▶</button>
+      <button class="tbtn stop" id="stop" title="stop">■</button>
+      <button class="tbtn warn" id="panic" title="all notes off">✷</button>
+    </div>
+    <div class="grp"><span class="kv">♩</span><input type="range" id="tempo" min="60" max="180" value="100">
+      <span class="kv"><b id="bpm">100</b></span></div>
+    <div class="sp"></div>
+    <div class="grp kv">wand <span class="dot" id="wanddot"></span> <b id="wandvar">—</b></div>
+    <div class="grp kv">sync spread <b id="spread">—</b></div>
+    <div class="grp kv">phones <b id="pcount">0</b></div>
+    <button class="tbtn ghost" id="joinbtn">⧉ join</button>
+    <a class="tbtn ghost" href="../home/">← menu</a>
+  </div>
+
+  <div id="main">
+    <!-- LEFT: the score, one lane per instrument -->
+    <div class="col" id="left">
+      <div class="panel-h"><span>Score</span><span id="songname"></span></div>
+      <div class="scroll" id="lanes"></div>
+      <div id="leftempty">No song loaded — the built-in melody is playing. Drop a MIDI in the
+        <a href="../editor/" style="color:var(--gold)">Control Room</a> to see its instrument lanes here.</div>
+    </div>
+
+    <!-- CENTER: live camera wand + phones connecting to it -->
+    <div class="col" id="center">
+      <div class="panel-h"><span>Live Camera — your hand is the wand</span></div>
+      <div id="cambox">
+        <iframe id="camframe" title="webcam wand" allow="camera"></iframe>
+        <div id="dots"></div>
+        <div id="camstart">
+          <div class="big">🖐 Conduct with your hand</div>
+          <div class="sub">Turn on the webcam. Pinch to grab, wave to shape the music.</div>
+          <div class="go">Enable camera wand</div>
+        </div>
+      </div>
+      <div class="panel-h" style="margin-top:.5rem"><span>Phones on the feed</span></div>
+      <div class="scroll" id="phones">
+        <div id="phonesempty">No phones yet — hit <b>⧉ join</b> and scan the QR. Each phone becomes an
+          instrument and shows up here, clock-synced to everyone else.</div>
+      </div>
+    </div>
+
+    <!-- RIGHT: gesture + wand -->
+    <div class="col" id="right">
+      <div class="panel-h"><span>Gesture &amp; Wand</span></div>
+      <div class="body">
+        <div class="wandcard" id="wandcard">
+          <div class="ico">🪄</div>
+          <div class="st">wand <b id="wandst">not connected</b><br><span id="wandsub">enable the camera, or scan to conduct</span></div>
+        </div>
+        <div class="gbar"><div class="lbl">energy / speed <b id="v-energy">0.00</b></div><div class="track"><div class="fill" id="f-energy"></div></div></div>
+        <div class="gbar"><div class="lbl">size <b id="v-size">0.00</b></div><div class="track"><div class="fill" id="f-size"></div></div></div>
+        <div class="gbar vert"><div class="lbl">vertical (lift) <b id="v-vertical">0.00</b></div><div class="track"><div class="fill" id="f-vertical"></div></div></div>
+        <div class="gbar"><div class="lbl">rotation / swirl <b id="v-rotation">0.00</b></div><div class="track"><div class="fill" id="f-rotation"></div></div></div>
+        <div class="gbar"><div class="lbl">duration <b id="v-duration">0.0s</b></div><div class="track"><div class="fill" id="f-duration"></div></div></div>
+        <div id="action">
+          <div class="did">your gesture →</div>
+          <div class="what" id="what">—</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- BOTTOM: live scrolling piano roll -->
+    <div id="rollwrap">
+      <canvas id="rollcanvas"></canvas>
+      <div id="nowplaying">warming up…</div>
+      <div id="rolltag">♪ live notes</div>
+    </div>
+  </div>
+
+  <div id="qrpop" class="panel" hidden>
+    <div class="lbl">SCAN TO JOIN</div>
+    <div id="qr"></div>
+    <div class="sub">your phone becomes an instrument</div>
+  </div>
+
+  <script src="../vendor/qrcode.js"></script>
+  <script type="module" src="./console.js"></script>
+</body>
+</html>
