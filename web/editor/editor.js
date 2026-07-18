@@ -115,6 +115,37 @@ function renderSong(eng) {
   el("tracks").innerHTML = tracks.map((t) => `<tr>
     <td>${t.is_melody ? '<span class="tag">melody</span>' : (t.is_drum ? "🥁" : "")}</td>
     <td>${t.name}</td><td>${t.instrument}</td><td>${t.note_count}</td></tr>`).join("");
+  drawRoll(tracks, eng.bars);
+}
+
+// Piano-roll: x = time across bars, y = pitch, one colour per track.
+const ROLL_COLORS = ["#ffd76a", "#7fd1ff", "#46d17a", "#e5686a", "#c77fff", "#e5a23d"];
+function drawRoll(tracks, bars) {
+  const cv = el("roll");
+  const dpr = window.devicePixelRatio || 1;
+  const W = (cv.width = cv.clientWidth * dpr);
+  const H = (cv.height = 130 * dpr);
+  const ctx = cv.getContext("2d");
+  ctx.clearRect(0, 0, W, H);
+  const notes = [];
+  tracks.forEach((t, ti) => (t.roll || []).forEach(([b, on, dur, p]) =>
+    notes.push({ b, on, dur, p, ti, drum: t.is_drum })));
+  if (!notes.length) return;
+  const ps = notes.map((n) => n.p);
+  const pmin = Math.min(...ps), pmax = Math.max(...ps);
+  const totalBars = bars || (Math.max(...notes.map((n) => n.b)) + 1);
+  const slots = totalBars * 16;
+  const rowH = H / (pmax - pmin + 2);
+  // faint bar lines
+  ctx.strokeStyle = "rgba(255,255,255,0.06)";
+  for (let b = 0; b <= totalBars; b++) { const x = (b * 16 / slots) * W; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
+  notes.forEach((n) => {
+    const x = ((n.b * 16 + n.on) / slots) * W;
+    const w = Math.max(2 * dpr, (n.dur / slots) * W - dpr);
+    const y = H - (n.p - pmin + 1) * rowH;
+    ctx.fillStyle = n.drum ? "#6a6a6a" : ROLL_COLORS[n.ti % ROLL_COLORS.length];
+    ctx.fillRect(x, y, w, Math.max(2 * dpr, rowH - dpr));
+  });
 }
 
 function abToBase64(ab) {

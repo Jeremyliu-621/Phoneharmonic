@@ -170,6 +170,14 @@ def load_midi_bytes(data: bytes, name: str = "uploaded") -> tuple[Song, list[dic
         for pb in part_bars:
             pb.sort()
         song_parts.append(SongPart(pi["instrument"], pi["is_drum"], pi["is_melody"], part_bars))
+        # compact piano-roll for the editor: [[bar, onset16, dur16, pitch], ...]
+        roll = []
+        for bi, notes in enumerate(part_bars):
+            for (on, dur, pitch, _v) in notes:
+                roll.append([bi, on, dur, pitch])
+                if len(roll) >= 400:
+                    break
+        pi["roll"] = roll
 
     song = Song(name=name, bpm=round(bpm, 1), key_root=key_root, bars=bars, parts=song_parts)
     return song, part_info

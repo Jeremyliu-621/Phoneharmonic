@@ -58,6 +58,12 @@ class Conductor:
         self._forced = candidate if candidate and candidate != "auto" else None
 
     def status(self) -> dict:
+        tracks = self._tracks
+        if not tracks:   # built-in song: expose its melody as a viewable track
+            roll = [[b, on, dur, pitch]
+                    for b, bar in enumerate(self.song.bars) for (on, dur, pitch) in bar.melody]
+            tracks = [{"name": "melody", "instrument": "synth", "is_drum": False,
+                       "is_melody": True, "note_count": len(roll), "roll": roll}]
         return {
             "playing": self._playing,
             "bpm": round(self.bpm),
@@ -68,7 +74,7 @@ class Conductor:
             "song": self.song.name,
             "key_root": self.song.key_root,
             "bars": len(self.song.bars),
-            "tracks": self._tracks,
+            "tracks": tracks,
         }
 
     # --- transport ---
