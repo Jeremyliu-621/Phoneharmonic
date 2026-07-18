@@ -38,15 +38,29 @@ class Conductor:
         self._ids = itertools.count(1)
         self._tracks: list[dict] = []                    # parts of a loaded MIDI (for the editor)
         self._reanchor = False                           # re-align the bar cursor on the next pull
+        self._anchor_ms = 0.0                            # server-ms of bar 0 (drives the editor playhead)
+        self._gesture_shift = 0                          # global octave shift (non-aimed gestures)
+        self._aimed: str | None = None                   # section the wand/editor is conducting (None = all)
+        self._part: dict[str, str] = {}                  # section_id -> pinned candidate (set by aiming)
+        self._part_shift: dict[str, int] = {}            # section_id -> pinned octave shift
 
     def load_song(self, song, tracks: list[dict] | None = None) -> None:
-        self.song = song
-        self._tracks = tracks or []
-        self.set_tempo(song.bpm)
+        """Replace the song and restart it cleanly from bar 0 (a freshly dropped MIDI)."""
+        self.update_song(song, tracks, reanchor=True, set_tempo=True)
         self._last_choice = None
-        self._reanchor = True   # start the new song cleanly at the next scheduler tick
         log.info("loaded song '%s': %d bars, key=%d, %d parts",
                  song.name, len(song.bars), song.key_root, len(self._tracks))
+
+    def update_song(self, song, tracks: list[dict] | None = None, *,
+                    reanchor: bool = False, set_tempo: bool = False) -> None:
+        """Swap in a new song. With reanchor=False the bar cursor keeps running, so
+        a live edit takes effect on the next bar rather than restarting playback."""
+        self.song = song
+        self._tracks = tracks or []
+        if set_tempo:
+            self.set_tempo(song.bpm)
+        if reanchor:
+            self._reanchor = True
 
     # --- editor controls ---
     def set_tempo(self, bpm: float) -> None:
@@ -59,8 +73,8 @@ class Conductor:
 
     def status(self) -> dict:
         tracks = self._tracks
-        if not tracks:   # built-in song: expose its melody as a viewable track
-            roll = [[b, on, dur, pitch]
+        if not tracks:   # built-in song: expose its melody as an editable track
+            roll = [[b, on, dur, pitch, 0.9]
                     for b, bar in enumerate(self.song.bars) for (on, dur, pitch) in bar.melody]
             tracks = [{"name": "melody", "instrument": "synth", "is_drum": False,
                        "is_melody": True, "note_count": len(roll), "roll": roll}]
@@ -75,6 +89,12 @@ class Conductor:
             "key_root": self.song.key_root,
             "bars": len(self.song.bars),
             "tracks": tracks,
+            "aimed": self._aimed,
+            # Lets the editor draw a smooth playhead from its own synced clock:
+            # pos16 = ((clock.serverNow() - anchor) / s16_ms) mod (n_bars*16).
+            "transport": {"playing": self._playing, "anchor": self._anchor_ms,
+                          "bar_ms": self.bar_ms, "s16_ms": self.s16_ms,
+                          "n_bars": len(self.song.bars)},
         }
 
     # --- transport ---
@@ -83,6 +103,7 @@ class Conductor:
             self._playing = True
             self._next_bar_idx = 0
             self._next_bar_start = t0_ms or 0.0
+            self._anchor_ms = self._next_bar_start
             log.info("transport start @%.0f  bar=%.0fms (%.0f BPM)",
                      self._next_bar_start, self.bar_ms, self.song.bpm)
         elif cmd in ("stop", "allnotesoff"):
@@ -95,13 +116,23 @@ class Conductor:
 
     def on_gesture(self, window: GestureWindow) -> None:
         self._gesture = extract_features(window)
-        log.info("gesture -> %s", {k: round(v, 2) for k, v in self._gesture.as_dict().items()})
+        choice = heuristic.choose(heuristic.rank(self._gesture, list(GENERATORS)), self._last_choice)
+        shift = heuristic.octave_shift(self._gesture)
+        if self._aimed:                                  # shape only the aimed instrument
+            self._part[self._aimed] = choice
+            self._part_shift[self._aimed] = shift
+            log.info("gesture -> %s on %s (aimed)", choice, self._aimed)
+        else:                                            # shape the whole accompaniment
+            self._last_choice = choice
+            self._gesture_shift = shift
+            log.info("gesture -> %s (all)", choice)
 
     def on_grab(self, kind: str, server_ms: float) -> None:
         pass  # grab edges could cut sustains; not needed for the slice
 
     def on_aim(self, section_id: str | None) -> None:
-        pass
+        self._aimed = section_id or None
+        log.info("aim -> %s", self._aimed or "all")
 
     def on_feedback(self, value: int) -> None:
         log.info("feedback %+d (ranker training wired in P5)", value)
@@ -113,6 +144,7 @@ class Conductor:
         if self._reanchor:                       # a freshly loaded song starts here
             self._next_bar_start = now_ms + 100.0
             self._next_bar_idx = 0
+            self._anchor_ms = self._next_bar_start
             self._reanchor = False
         events: list[NoteEvent] = []
         while self._next_bar_start <= until_ms:
@@ -133,46 +165,48 @@ class Conductor:
         bar = self.song.bar(idx)
         prev = self.song.bar(idx - 1)
         cands = generate(bar, prev, self.song.key_root)
-
-        # Editor override wins; otherwise the ranker picks from the gesture.
-        if self._forced and self._forced in cands:
-            choice = self._forced
-        else:
-            scores = heuristic.rank(self._gesture, list(cands.keys()))
-            choice = heuristic.choose(scores, self._last_choice)
-        self._last_choice = choice
-        shift = heuristic.octave_shift(self._gesture)
-
-        responder = cands[choice]
-        art = ART.get(choice, "pluck")
         events: list[NoteEvent] = []
 
-        # Distribute parts so multiple phones are genuinely different instruments:
-        #   2+ sections -> section[0] plays melody, the rest play the accompaniment
-        #   1 section   -> it plays both
-        #   0 sections  -> laptop (stage) plays everything via SECTION_ALL
-        n = len(self._sections)
-        if n >= 2:
-            melody_sec = self._sections[0].section_id
-            responder_secs = [s.section_id for s in self._sections[1:]]
-        elif n == 1:
-            melody_sec = self._sections[0].section_id
-            responder_secs = [melody_sec]
-        else:
-            melody_sec = SECTION_ALL
-            responder_secs = [SECTION_ALL]
+        # Global accompaniment choice: editor force > last non-aimed gesture > pad.
+        gchoice = self._forced if (self._forced and self._forced in cands) else (self._last_choice or "sustained")
+        if gchoice not in cands:
+            gchoice = "sustained"
+        self._last_choice = self._last_choice or gchoice
+        melody_notes = [(on, dur, midi, 0.9) for (on, dur, midi) in bar.melody]
 
-        for (on, dur, midi, vel) in responder:
-            at, d, note = bar_start + on * self.s16_ms, dur * self.s16_ms, _clampmidi(midi + shift)
-            for sec in responder_secs:
-                events.append(self._note(sec, at, d, note, vel, art))
+        sections = self._sections
+        if not sections:
+            # Laptop-only: melody + global accompaniment on the shared stream.
+            self._emit(events, None, cands[gchoice], bar_start, ART.get(gchoice, "pluck"), self._gesture_shift)
+            self._emit(events, None, melody_notes, bar_start, "pluck", 0)
+            return events
 
-        for (on, dur, midi) in bar.melody:
-            events.append(self._note(melody_sec, bar_start + on * self.s16_ms,
-                                     dur * self.s16_ms, midi, 0.9, "pluck"))
+        # Each instrument plays its own part: a pinned candidate if it was aimed +
+        # shaped, else the lead plays the melody and everyone else the global
+        # accompaniment. Per-section volume/mute applied in _emit.
+        for i, s in enumerate(sections):
+            pinned = self._part.get(s.section_id)
+            if pinned is not None and pinned in cands:
+                notes, art, shift = cands[pinned], ART.get(pinned, "pluck"), self._part_shift.get(s.section_id, 0)
+            elif i == 0:
+                notes, art, shift = melody_notes, "pluck", 0
+            else:
+                notes, art, shift = cands[gchoice], ART.get(gchoice, "pluck"), self._gesture_shift
+            self._emit(events, s, notes, bar_start, art, shift)
 
-        log.info("bar %d -> %s (%d notes, shift %+d, %d sections)", idx, choice, len(responder), shift, n)
+        log.info("bar %d: %d sections, global=%s, pinned=%s", idx, len(sections), gchoice, self._part or "-")
         return events
+
+    def _emit(self, events, sinfo, notes, bar_start, art, shift):
+        """Emit `notes` for a section (None -> SECTION_ALL / laptop), applying its
+        volume and mute."""
+        if sinfo is not None and (sinfo.muted or sinfo.volume <= 0.001):
+            return
+        section = SECTION_ALL if sinfo is None else sinfo.section_id
+        vol = 1.0 if sinfo is None else sinfo.volume
+        for (on, dur, midi, vel) in notes:
+            events.append(self._note(section, bar_start + on * self.s16_ms, dur * self.s16_ms,
+                                     _clampmidi(midi + shift), max(0.05, vel * vol), art))
 
     def _arrangement_events(self, idx: int, bar_start: float) -> list[NoteEvent]:
         """Play a loaded MIDI's parts distributed across sections (round-robin;
@@ -180,33 +214,38 @@ class Conductor:
         riding on the lead. Drums are skipped until we have a percussion voice."""
         events: list[NoteEvent] = []
         n = len(self._sections)
-        melody_sec = SECTION_ALL
+        melody_info = None
         for i, part in enumerate(self.song.parts):
-            sec = SECTION_ALL if n == 0 else self._sections[i % n].section_id
+            sinfo = self._sections[i % n] if n else None
             if part.is_melody:
-                melody_sec = sec
+                melody_info = sinfo
+            if sinfo is not None and (sinfo.muted or sinfo.volume <= 0.001):
+                continue
+            sec = SECTION_ALL if sinfo is None else sinfo.section_id
+            vol = 1.0 if sinfo is None else sinfo.volume
             for (on, dur, midi, vel) in part.bars[idx % len(part.bars)]:
                 # Drum notes carry art="drum": the synth plays them as percussion by
                 # MIDI drum-map pitch, independent of the section's instrument timbre.
                 art = "drum" if part.is_drum else ("sustain" if dur >= 8 else "pluck")
                 midi_out = midi if part.is_drum else _clampmidi(midi)
                 events.append(self._note(sec, bar_start + on * self.s16_ms,
-                                         dur * self.s16_ms, midi_out, max(0.12, vel), art))
+                                         dur * self.s16_ms, midi_out, max(0.08, vel * vol), art))
 
-        # Gesture/editor layer: a candidate built from the lead, riding on top.
+        # Gesture/editor accompaniment layer, riding on the lead instrument.
         bar, prev = self.song.bar(idx), self.song.bar(idx - 1)
         cands = generate(bar, prev, self.song.key_root)
-        if self._forced and self._forced in cands:
-            choice = self._forced
-        else:
-            choice = heuristic.choose(heuristic.rank(self._gesture, list(cands.keys())), self._last_choice)
-        self._last_choice = choice
-        shift = heuristic.octave_shift(self._gesture)
-        for (on, dur, midi, vel) in cands[choice]:
-            events.append(self._note(melody_sec, bar_start + on * self.s16_ms,
-                                     dur * self.s16_ms, _clampmidi(midi + shift), vel * 0.7,
-                                     ART.get(choice, "pluck")))
-        log.info("bar %d arrangement: %d parts -> %d sections, overlay=%s", idx, len(self.song.parts), n, choice)
+        gchoice = self._forced if (self._forced and self._forced in cands) else (self._last_choice or "sustained")
+        if gchoice not in cands:
+            gchoice = "sustained"
+        self._last_choice = self._last_choice or gchoice
+        if not (melody_info is not None and (melody_info.muted or melody_info.volume <= 0.001)):
+            msec = SECTION_ALL if melody_info is None else melody_info.section_id
+            mvol = 1.0 if melody_info is None else melody_info.volume
+            for (on, dur, midi, vel) in cands[gchoice]:
+                events.append(self._note(msec, bar_start + on * self.s16_ms, dur * self.s16_ms,
+                                         _clampmidi(midi + self._gesture_shift), vel * 0.7 * mvol,
+                                         ART.get(gchoice, "pluck")))
+        log.info("bar %d arrangement: %d parts -> %d sections, overlay=%s", idx, len(self.song.parts), n, gchoice)
         return events
 
     def _note(self, section: str, at: float, dur: float, midi: int, vel: float, art: str) -> NoteEvent:

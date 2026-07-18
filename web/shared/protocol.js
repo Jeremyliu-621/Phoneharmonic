@@ -13,6 +13,8 @@ export const WAND_RECAL = "wand.recal";
 export const STAGE_PLACE = "stage.place";
 export const STAGE_ASSIGN = "stage.assign";
 export const ADMIN_CMD = "admin.cmd";
+export const SONG_LOAD = "song.load";
+export const SONG_EDIT = "song.edit";   // editor-authored notes -> replaces/updates the song
 export const CLOCK_REPORT = "clock.report";
 
 // Server -> Client

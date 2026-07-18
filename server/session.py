@@ -9,6 +9,9 @@ from dataclasses import dataclass, field
 
 from engine_api import SectionInfo
 
+# Distinct instruments handed out as phones join, so no two sound identical.
+INSTRUMENT_ROTATION = ["violin", "cello", "flute", "clarinet", "viola", "piano", "bass", "bell"]
+
 
 @dataclass
 class Section:
@@ -18,6 +21,8 @@ class Section:
     azimuth_deg: float = 0.0
     connected: bool = True
     ready: bool = False
+    volume: float = 1.0
+    muted: bool = False
 
 
 @dataclass
@@ -40,9 +45,17 @@ class SessionState:
         self._next_section_num += 1
         return sid
 
+    def next_instrument(self) -> str:
+        """First instrument in the rotation not already in use (else wrap)."""
+        used = {s.instrument for s in self.sections.values()}
+        for inst in INSTRUMENT_ROTATION:
+            if inst not in used:
+                return inst
+        return INSTRUMENT_ROTATION[len(self.sections) % len(INSTRUMENT_ROTATION)]
+
     def engine_sections(self) -> list[SectionInfo]:
         return [
-            SectionInfo(s.section_id, s.instrument, s.azimuth_deg, s.ready)
+            SectionInfo(s.section_id, s.instrument, s.azimuth_deg, s.ready, s.volume, s.muted)
             for s in self.sections.values()
             if s.connected
         ]
@@ -57,6 +70,8 @@ class SessionState:
                     "azimuth_deg": s.azimuth_deg,
                     "connected": s.connected,
                     "ready": s.ready,
+                    "volume": s.volume,
+                    "muted": s.muted,
                 }
                 for s in self.sections.values()
             ],

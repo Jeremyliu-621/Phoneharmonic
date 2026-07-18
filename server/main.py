@@ -188,9 +188,10 @@ class App:
                 log.info("section %s rejoined as %s", s.section_id, conn.client_id[:8])
                 return s
         sid = self.session.new_section_id()
-        section = Section(section_id=sid, client_id=conn.client_id)
+        section = Section(section_id=sid, client_id=conn.client_id,
+                          instrument=self.session.next_instrument())
         self.session.sections[sid] = section
-        log.info("section %s created for %s", sid, conn.client_id[:8])
+        log.info("section %s created for %s (instrument=%s)", sid, conn.client_id[:8], section.instrument)
         return section
 
     async def _message_loop(self, conn: ClientConn) -> None:
@@ -248,6 +249,9 @@ class App:
         if t == P.SONG_LOAD:
             await self._load_song(conn, msg.get("name", "uploaded"), msg.get("data", ""))
             return
+        if t == P.SONG_EDIT:
+            await self._apply_edit(conn, msg.get("song") or {})
+            return
         if t in (P.WAND_RECAL, P.STAGE_PLACE):
             return  # aiming/placement wired in P5
 
@@ -269,6 +273,19 @@ class App:
             self.engine.set_tempo(float(args.get("bpm", 100)))
         elif cmd == "force":
             self.engine.set_forced(args.get("candidate"))
+        elif cmd == "aim":
+            sid = args.get("section_id")
+            self.engine.on_aim(sid if sid and sid != "all" else None)
+        elif cmd == "volume":
+            sec = self.session.sections.get(args.get("section_id"))
+            if sec:
+                sec.volume = max(0.0, min(1.0, float(args.get("volume", 1.0))))
+                self.engine.on_sections_changed(self.session.engine_sections())
+        elif cmd == "mute":
+            sec = self.session.sections.get(args.get("section_id"))
+            if sec:
+                sec.muted = bool(args.get("muted"))
+                self.engine.on_sections_changed(self.session.engine_sections())
         elif cmd == "record":
             if args.get("action") == "start":
                 self.recorder.start(args.get("label", ""))
