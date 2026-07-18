@@ -17,6 +17,7 @@ WAND_FEEDBACK = "wand.feedback" # {value: 1|-1}
 WAND_RECAL = "wand.recal"       # {tw}        zero the aiming yaw
 WAND_TOUCH = "wand.touch"       # {pad:0-11, state:"down"|"up"}  MPR121 pads: 0-5 force a candidate
 WAND_RANGE = "wand.range"       # {mm}        ToF distance -> proximity tension (fx.tension)
+WAND_MODE = "wand.mode"         # {mode:"ai"|"det"}  physical toggle: gestures compose vs continuous control
 STAGE_PLACE = "stage.place"     # {section_id, azimuth_deg, pos:[x,y,z]}
 STAGE_ASSIGN = "stage.assign"   # {section_id, instrument}
 STAGE_RECORD = "stage.record"   # {sha256, bytes, dur_s}  finished room recording -> ledger
@@ -35,6 +36,7 @@ ROSTER = "roster"               # {playing, sections:[...], wand:{...}}
 WAND_STATE = "wand.state"       # {grabbed, aim_section, yaw_deg}   -> stage/admin, throttled
 ANNOUNCE = "announce"           # {text, audio_b64?, mime?}  commentator line -> stage/admin
 FX_TENSION = "fx.tension"       # {value: 0..1}  proximity build-up -> sections + stage
+FX_EXPR = "fx.expr"             # {section, semis, gain}  deterministic-mode expression warp
 ERR = "err"                     # {code, msg}
 
 # Special section id meaning "every section plays this event".

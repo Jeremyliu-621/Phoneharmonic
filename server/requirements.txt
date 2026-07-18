@@ -3,6 +3,7 @@ websockets>=16,<17
 
 # Music engine
 mido>=1.3          # MIDI file parsing (pure-python)
+pyserial>=3.5      # Bluetooth-serial wand bridge (tools/wand_bridge.py)
 
 # ML (added as those phases land)
 # numpy

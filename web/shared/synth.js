@@ -90,6 +90,7 @@ export class Synth {
     const g = this.ctx.createGain();
     osc.type = this.timbre ? this.timbre.wave : (sustain ? "sine" : "triangle");
     osc.frequency.value = noteToFreq(ev.note);
+    if (this.exprSemis) osc.detune.value = this.exprSemis * 100;
     if (this.timbre) {
       const lp = this.ctx.createBiquadFilter();
       lp.type = "lowpass";
@@ -180,6 +181,17 @@ export class Synth {
       noise.connect(hp).connect(g);
       noise.start(t); noise.stop(t + (open ? 0.3 : 0.08));
       this.scheduled.push(noise);
+    }
+  }
+
+  // Deterministic-mode expression (fx.expr): scale-locked pitch offset + volume
+  // swell. Warps live voices (detune ramp) and everything scheduled after.
+  setExpression(semis, gain) {
+    this.exprSemis = semis || 0;
+    if (!this.ctx) return;
+    if (this.master) this.master.gain.setTargetAtTime(0.22 * (gain || 1), this.ctx.currentTime, 0.08);
+    for (const src of this.scheduled) {
+      if (src.detune) src.detune.setTargetAtTime(this.exprSemis * 100, this.ctx.currentTime, 0.06);
     }
   }
 

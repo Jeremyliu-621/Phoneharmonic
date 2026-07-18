@@ -238,6 +238,9 @@ conn.on(P.SCHED_NOTES, (m) => {
   }
 });
 conn.on(P.SCHED_CANCEL, (m) => { if (m.allnotesoff) synth.panic(); });
+conn.on(P.FX_EXPR, (m) => {     // laptop-orchestra mode: apply the warp directly
+  if (m.section === P.SECTION_ALL) synth.setExpression(m.semis, m.gain);
+});
 conn.on(P.FX_TENSION, (m) => {
   synth.setTension(m.value);
   // Make the build-up visible too: footlights fade and the room desaturates.

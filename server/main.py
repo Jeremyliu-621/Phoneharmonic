@@ -24,6 +24,7 @@ import uuid
 import websockets
 from websockets.asyncio.server import ServerConnection, serve
 
+import arranger
 import protocol as P
 from announcer import Announcer
 from clocksync import server_time_ms
@@ -84,6 +85,8 @@ class App:
         self._last_state_ms = 0.0               # wand.state broadcast throttle
         self._tension = 0.0
         self._last_tension_ms = 0.0
+        self._last_expr = (0, 1.0)              # deterministic-mode (semis, gain) throttle
+        self._last_expr_ms = 0.0
         self._vibe_task: asyncio.Task | None = None
 
     # --- session persistence + roster hygiene ---
@@ -258,6 +261,13 @@ class App:
                 await self._broadcast_roster()
             return
 
+        # The performer's other hand: CV-palm / wand hardware may drive transport
+        # (only these verbs — a rogue wand can pause the show, never hijack it).
+        if (t == P.ADMIN_CMD and conn.role in P.WAND_ROLES
+                and msg.get("cmd") in ("start", "stop", "rewind", "forward")):
+            await self._admin(msg.get("cmd"), {})
+            return
+
         # Show control: only the stage/editor may drive the show — the join QR
         # is public, so audience phones must not be able to stop or hijack it.
         if (t in (P.ADMIN_CMD, P.SONG_LOAD, P.SONG_HUM, P.STAGE_ASSIGN, P.STAGE_PLACE, P.STAGE_RECORD)
@@ -280,7 +290,20 @@ class App:
             self.wand.on_pose(msg.get("frames", []))
             return
         if t == P.WAND_GRAB:
-            self.wand.on_grab(msg.get("state", ""), server_time_ms())
+            if self.session.wand.mode != "det":  # det mode: continuous control, no gesture windows
+                self.wand.on_grab(msg.get("state", ""), server_time_ms())
+            return
+        if t == P.WAND_MODE:                    # physical toggle: ai composes / det controls
+            mode = "det" if msg.get("mode") == "det" else "ai"
+            if mode != self.session.wand.mode:
+                self.session.wand.mode = mode
+                self.wand.reset()               # a mid-grab toggle must not strand a window
+                if mode == "ai":                # leaving det: release the warp everywhere
+                    await self.hub.broadcast({"t": P.FX_EXPR, "section": P.SECTION_ALL,
+                                              "semis": 0, "gain": 1.0}, roles=("section", "stage"))
+                self.showlog.record("wand.mode", mode=mode)
+                log.info("wand mode -> %s", mode)
+                await self._broadcast_roster()
             return
         if t == P.WAND_FEEDBACK:
             self.engine.on_feedback(int(msg.get("value", 0)))
@@ -342,6 +365,8 @@ class App:
             self.announcer.poke("show.stop",
                                 f"The set just ended after {m['events']} logged moments. "
                                 f"Its fingerprint hash is {m['head_hash'][:12]}. Send the crowd off.")
+        elif cmd in ("rewind", "forward"):
+            self.engine.on_transport(cmd, None)
         elif cmd == "allnotesoff":
             self.engine.on_transport("allnotesoff", None)
         elif cmd == "tempo":
@@ -380,9 +405,31 @@ class App:
                                                "instrument": section.instrument})
             self.engine.on_sections_changed(self.session.engine_sections())
             await self._broadcast_roster()
+            # The LLM arranger (async, best-effort) regroups parts by musical role.
+            ready_ids = [s.section_id for s in ready]
+            asyncio.create_task(self._arrange(tracks, ready_ids))
         except Exception as e:  # noqa: BLE001 - report parse failures to the uploader
             log.warning("midi load failed for %r: %s", name, e)
             await send_json(conn.ws, {"t": P.ERR, "code": "bad_midi", "msg": str(e)})
+
+    async def _arrange(self, tracks: list[dict], section_ids: list[str]) -> None:
+        mapping = await arranger.arrange(tracks, section_ids)
+        if not mapping:
+            return
+        self.engine.set_part_assignment(mapping)
+        for sid, idxs in mapping.items():        # re-seat each phone on its first part
+            section = self.session.sections.get(sid)
+            if section and idxs and idxs[0] < len(tracks):
+                section.instrument = tracks[idxs[0]]["instrument"]
+                c = self.hub.get(section.client_id)
+                if c:
+                    await send_json(c.ws, {"t": P.SECTION_CONFIG, "section_id": sid,
+                                           "instrument": section.instrument})
+        self.showlog.record("arrangement", mapping=mapping)
+        self.announcer.poke("song.load", "The AI arranger just seated the orchestra: "
+                            + ", ".join(f"{sid} takes {len(ix)} part(s)"
+                                        for sid, ix in mapping.items()))
+        await self._broadcast_roster()
 
     # --- wand feature surface (aiming, pads, proximity) ---
     def _placements(self) -> dict[str, float]:
@@ -397,9 +444,35 @@ class App:
         return {s.section_id: (0.0 if n == 1 else -60.0 + 120.0 * i / (n - 1))
                 for i, s in enumerate(ready)}
 
+    _DEG = (0, 2, 4, 5, 7, 9, 11)   # major-scale semitone offsets (expression quantizer)
+
+    async def _expression(self, frames: list, aim: str | None) -> None:
+        """Deterministic mode: the wand is a continuous controller. Lifting it
+        raises the pitch in scale-locked degrees (quantized, so it can never
+        sound wrong) and swells the volume with it, streamed to the aimed phone;
+        every other phone reads the section field and resets to neutral."""
+        row = frames[-1] if frames else None
+        if not row or len(row) < 3:
+            return
+        try:
+            tilt = max(-1.0, min(1.0, float(row[2]) / 9.8))   # ay = the lift axis
+        except (TypeError, ValueError):
+            return
+        oct_, step = divmod(round(tilt * 7), 7)
+        semis = oct_ * 12 + self._DEG[step]
+        gain = round(0.65 + 0.35 * (tilt + 1) / 2, 3)
+        now = server_time_ms()
+        if (semis, gain) == self._last_expr or now - self._last_expr_ms < 100.0:
+            return
+        self._last_expr, self._last_expr_ms = (semis, gain), now
+        await self.hub.broadcast({"t": P.FX_EXPR, "section": aim or P.SECTION_ALL,
+                                  "semis": semis, "gain": gain}, roles=("section", "stage"))
+
     async def _update_aim(self, frames: list) -> None:
         self.aimer.on_frames(frames)
         aim = self.aimer.resolve(self._placements())
+        if self.session.wand.mode == "det":
+            await self._expression(frames, aim)
         now = server_time_ms()
         if aim != self._last_aim:
             self._last_aim = aim

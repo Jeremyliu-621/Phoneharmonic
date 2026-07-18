@@ -26,6 +26,7 @@ class WandSlot:
     connected: bool = False
     variant: str = "none"     # "sim" | "hw" | "none"
     aim_mode: str = "cycle"   # "cycle" (tap to select) | "yaw" (pointing)
+    mode: str = "ai"          # "ai" (gestures compose) | "det" (continuous control)
 
 
 @dataclass
@@ -84,5 +85,6 @@ class SessionState:
                 "connected": self.wand.connected,
                 "variant": self.wand.variant,
                 "aim_mode": self.wand.aim_mode,
+                "mode": self.wand.mode,
             },
         }

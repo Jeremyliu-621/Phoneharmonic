@@ -19,6 +19,8 @@ const MODEL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/h
 
 // MediaPipe hand landmark indices.
 const WRIST = 0, THUMB_TIP = 4, INDEX_MCP = 5, INDEX_TIP = 8, MIDDLE_MCP = 9, PINKY_MCP = 17;
+const INDEX_PIP = 6, MIDDLE_TIP = 12, MIDDLE_PIP = 10, RING_TIP = 16, RING_PIP = 14,
+      PINKY_TIP = 20, PINKY_PIP = 18;
 
 // Pinch hysteresis: grab when the thumb–index gap (relative to hand width) drops
 // below GRAB_ON, release when it rises above GRAB_OFF. Two thresholds prevent flicker.
@@ -44,6 +46,7 @@ let poseBuf = [];
 const trail = [];             // {xm, y, grabbed}
 let lastFrameT = 0, fps = 0;
 let aimSection = 0;
+let palmSince = 0, palmXs = [], lastTransport = 0, playing = true;
 
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
@@ -130,6 +133,45 @@ function processHand(lm, now) {
 
   trail.push({ xm, y: tip.y, grabbed });
   if (trail.length > TRAIL_LEN) trail.shift();
+
+  // Open palm = global transport (all four fingers extended, no pinch).
+  const open = !grabbed && [[INDEX_TIP, INDEX_PIP], [MIDDLE_TIP, MIDDLE_PIP],
+                            [RING_TIP, RING_PIP], [PINKY_TIP, PINKY_PIP]]
+    .every(([t2, p2]) => dist(lm[t2], lm[WRIST]) > dist(lm[p2], lm[WRIST]) * 1.15);
+  handlePalm(open, xm, now);
+}
+
+// Open palm = the DJ's global transport hand: hold it ~0.6s to stop/start the
+// show; swipe it left/right to rewind/skip 4 bars (beat-locked on the server).
+function handlePalm(open, xm, now) {
+  if (!open) { palmSince = 0; palmXs = []; return; }
+  palmXs.push({ t: now, xm });
+  while (palmXs.length && now - palmXs[0].t > 350) palmXs.shift();
+  if (now - lastTransport < 1200) return;
+  const dx = palmXs.length > 3 ? xm - palmXs[0].xm : 0;
+  if (Math.abs(dx) > 0.22) {                     // swipe: jump the timeline
+    send({ t: P.ADMIN_CMD, cmd: dx < 0 ? "rewind" : "forward" });
+    lastTransport = now; palmSince = 0; palmXs = [];
+    flashCmd(dx < 0 ? "⏪ rewind 4 bars" : "⏩ forward 4 bars");
+    return;
+  }
+  if (!palmSince) palmSince = now;
+  else if (now - palmSince > 600) {              // hold: stop / start
+    playing = !playing;
+    send({ t: P.ADMIN_CMD, cmd: playing ? "start" : "stop" });
+    lastTransport = now; palmSince = 0;
+    flashCmd(playing ? "▶ start" : "⏸ stop");
+  }
+}
+
+function flashCmd(text) {
+  const d = document.createElement("div");
+  d.textContent = text;
+  d.style.cssText = "position:fixed;left:50%;top:18%;transform:translateX(-50%);z-index:50;" +
+    "color:#e7c583;background:rgba(20,12,8,.9);padding:10px 20px;border:1px solid #a8712a;" +
+    "border-radius:8px;font-size:22px;transition:opacity .5s;pointer-events:none";
+  document.body.appendChild(d);
+  setTimeout(() => { d.style.opacity = "0"; setTimeout(() => d.remove(), 600); }, 900);
 }
 
 function flushPose() {

@@ -1,9 +1,14 @@
 # Hardware wand — the exact firmware contract
 
-Everything the physical wand (UNO Q or ESP32) must speak. Plain WebSocket to
-`ws://<server-lan-ip>:8080/ws`, JSON text frames. No TLS, no OSC, no server
-changes needed — `web/wandsim/wandsim.js` is the byte-for-byte reference
-implementation you can diff against.
+Everything the physical wand (UNO Q or ESP32) must speak. Two transport
+options, same JSON messages either way:
+
+- **WebSocket** (WiFi): connect to `ws://<server-lan-ip>:8080/ws`, JSON text
+  frames. `web/wandsim/wandsim.js` is the byte-for-byte reference.
+- **Bluetooth Serial** (the new plan): pair with the laptop and print ONE
+  JSON message PER LINE over serial — no hello, no WiFi stack, nothing else.
+  The laptop runs the bridge, which handles the handshake and forwarding:
+  `python server/tools/wand_bridge.py --port /dev/tty.<device> --baud 115200`.
 
 ## Handshake
 
@@ -26,6 +31,7 @@ the same wand. Latest wand to connect owns the single wand slot.
 | `wand.touch` | `{"pad": 0-11, "state": "down"\|"up"}` | on pad edge | Pads 0-5 force a candidate while held (0 lower_imitation, 1 contrary_motion, 2 sustained, 3 delayed, 4 rhythmic_dense, 5 rest); `up` returns to auto. Pads 6+ are yours for firmware-side modes |
 | `wand.range` | `{"mm": 234.0}` | ~10 Hz while valid | Proximity tension: 600mm+ = open, 100mm = full wash-out (fx.tension to every phone) |
 | `wand.recal` | `{"tw": ms}` | on a button press | Zeroes the aiming yaw ("this way is forward") |
+| `wand.mode` | `{"mode": "ai"\|"det"}` | on the physical toggle | **ai**: grabs become gesture windows the AI composes from. **det**: continuous control — lifting the wand streams scale-locked pitch + volume swell to the aimed phone (`fx.expr`); grabs are ignored |
 | `wand.feedback` | `{"value": 1\|-1}` | on thumbs pads | Weights the last musical decision in the training data |
 
 Units and axis convention (MUST match — the server interprets, the wand only

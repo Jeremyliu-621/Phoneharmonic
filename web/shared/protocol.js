@@ -12,6 +12,7 @@ export const WAND_FEEDBACK = "wand.feedback";
 export const WAND_RECAL = "wand.recal";
 export const WAND_TOUCH = "wand.touch";   // {pad, state} MPR121 pads (hw wand)
 export const WAND_RANGE = "wand.range";   // {mm} ToF distance (hw wand)
+export const WAND_MODE = "wand.mode";     // {mode: "ai"|"det"}
 export const STAGE_PLACE = "stage.place";
 export const STAGE_ASSIGN = "stage.assign";
 export const STAGE_RECORD = "stage.record";  // {sha256, bytes, dur_s}
@@ -30,6 +31,7 @@ export const ROSTER = "roster";
 export const WAND_STATE = "wand.state";
 export const ANNOUNCE = "announce";       // {text, audio_b64?, mime?}
 export const FX_TENSION = "fx.tension";   // {value: 0..1}
+export const FX_EXPR = "fx.expr";         // {section, semis, gain}
 export const ERR = "err";
 
 export const SECTION_ALL = "all";

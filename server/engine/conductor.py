@@ -39,7 +39,8 @@ class Conductor:
         self._gesture: GestureFeatures | None = None
         self._last_choice: str | None = None
         self._forced: str | None = None                 # editor override; None = let the ranker choose
-        self._aim: str | None = None                    # wand-aimed section (spatial mode)
+        self._aim: str | None = None                    # wand-aimed section (spatial/solo mode)
+        self._part_map: dict[int, str] | None = None    # LLM arranger: part idx -> section
         self._pickup: list | None = None                # instant gesture answer, pending emission
         self._model = RemoteModel()                     # trained policy (WM_MODEL_URL); optional
         self._barmodel = RemoteBarModel()               # trained line writer (WM_BARMODEL_URL)
@@ -55,6 +56,7 @@ class Conductor:
     def load_song(self, song, tracks: list[dict] | None = None) -> None:
         self.song = song
         self._tracks = tracks or []
+        self._part_map = None                   # a new song gets a fresh arrangement
         self.set_tempo(song.bpm)
         self._last_choice = None
         self._reanchor = True   # start the new song cleanly at the next scheduler tick
@@ -103,6 +105,9 @@ class Conductor:
             self._next_bar_start = t0_ms or 0.0
             log.info("transport start @%.0f  bar=%.0fms (%.0f BPM)",
                      self._next_bar_start, self.bar_ms, self.song.bpm)
+        elif cmd in ("rewind", "forward"):       # palm-swipe time jump, beat-locked
+            self._next_bar_idx = max(0, self._next_bar_idx + (-4 if cmd == "rewind" else 4))
+            log.info("timeline %s -> bar %d", cmd, self._next_bar_idx)
         elif cmd in ("stop", "allnotesoff"):
             self._playing = False
             self._cancels.append(CancelSpec(allnotesoff=True))
@@ -293,11 +298,23 @@ class Conductor:
         return [(on, dur, midi + shift, min(1.0, vel * vel_scale))
                 for (on, dur, midi, vel) in kept]
 
+    def set_part_assignment(self, mapping: dict[str, list[int]] | None) -> None:
+        """LLM-arranger routing: section_id -> part indices. None = round-robin."""
+        self._part_map = {}
+        for sid, idxs in (mapping or {}).items():
+            for i in idxs:
+                self._part_map[int(i)] = sid
+        if not self._part_map:
+            self._part_map = None
+        log.info("part assignment: %s", mapping or "round-robin")
+
     def _arrangement_events(self, idx: int, bar_start: float) -> list[NoteEvent]:
         """Play a loaded MIDI's parts distributed across sections — bent to the
         conductor via _shape (the melody part is the song's identity and plays
-        verbatim), plus the gesture layer riding on the lead. Drum parts play
-        through the synth's percussion voice (art="drum")."""
+        verbatim), plus the gesture layer riding on the lead. The LLM arranger's
+        part map routes parts when present; aiming the wand at a phone SOLOS it
+        (every other phone mutes for the bar). Drum parts play through the
+        synth's percussion voice (art="drum")."""
         bar, prev = self.song.bar(idx), self.song.bar(idx - 1)
         cands = generate(bar, prev, self.song.key_root)
         self._take_generated(idx, cands)
@@ -306,11 +323,18 @@ class Conductor:
 
         events: list[NoteEvent] = []
         n = len(self._sections)
-        melody_sec = SECTION_ALL
+        solo = self._aim if any(s.section_id == self._aim for s in self._sections) else None
+        melody_sec = solo or SECTION_ALL
         for i, part in enumerate(self.song.parts):
-            sec = SECTION_ALL if n == 0 else self._sections[i % n].section_id
-            if part.is_melody:
+            if self._part_map and i in self._part_map and any(
+                    s.section_id == self._part_map[i] for s in self._sections):
+                sec = self._part_map[i]
+            else:
+                sec = SECTION_ALL if n == 0 else self._sections[i % n].section_id
+            if part.is_melody and not solo:
                 melody_sec = sec
+            if solo and sec != solo:
+                continue                         # isolation: only the aimed phone sounds
             raw = part.bars[idx % len(part.bars)]
             notes = raw if part.is_melody else self._shape(raw, decision, part.is_drum)
             for (on, dur, midi, vel) in notes:
@@ -324,8 +348,8 @@ class Conductor:
             events.append(self._note(melody_sec, bar_start + on * self.s16_ms,
                                      dur * self.s16_ms, _clampmidi(midi + shift), vel * 0.7,
                                      ART.get(choice, "pluck")))
-        log.info("bar %d arrangement: %d parts -> %d sections, shape=%s",
-                 idx, len(self.song.parts), n, choice)
+        log.info("bar %d arrangement: %d parts -> %d sections, shape=%s%s",
+                 idx, len(self.song.parts), n, choice, f", solo={solo}" if solo else "")
         return events
 
     def _note(self, section: str, at: float, dur: float, midi: int, vel: float, art: str) -> NoteEvent:
