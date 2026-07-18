@@ -104,6 +104,7 @@ class Conductor:
             self._next_bar_idx = 0
             self._next_bar_start = t0_ms or 0.0
             self._anchor_ms = self._next_bar_start
+            self._reanchor = False   # a fresh start supersedes a pending load re-anchor
             log.info("transport start @%.0f  bar=%.0fms (%.0f BPM)",
                      self._next_bar_start, self.bar_ms, self.song.bpm)
         elif cmd in ("stop", "allnotesoff"):

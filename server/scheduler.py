@@ -27,6 +27,7 @@ class Scheduler:
         self._hub = hub
         self._task: asyncio.Task | None = None
         self._seen_choice: str | None = None
+        self._seen_transport: tuple | None = None
 
     def start(self) -> None:
         if self._task is None:
@@ -85,14 +86,18 @@ class Scheduler:
             await self._hub.broadcast({"t": SCHED_NOTES, "events": safe},
                                       roles=("section", "stage"))
 
-        # 3) When the chosen accompaniment changes, push a light live update to the
-        # stage/editor (drives the "now playing" + change indicator, even laptop-only).
+        # 3) When the accompaniment OR the transport (anchor/tempo/length) changes,
+        # push a light live update to the stage/editor. This drives the "now playing"
+        # indicator and the editor's playhead, which reads `transport` to place itself.
         status = getattr(self._engine, "status", None)
         if status:
             st = status()
-            if st.get("last_choice") != self._seen_choice:
+            tr = st.get("transport") or {}
+            tsig = (tr.get("playing"), round(tr.get("anchor", 0.0)), tr.get("n_bars"), round(tr.get("bar_ms", 0.0)))
+            if st.get("last_choice") != self._seen_choice or tsig != self._seen_transport:
                 self._seen_choice = st.get("last_choice")
+                self._seen_transport = tsig
                 await self._hub.broadcast({
                     "t": ENGINE_STATE, "last_choice": st["last_choice"], "gesture": st["gesture"],
-                    "playing": st["playing"], "bpm": st["bpm"], "song": st["song"],
+                    "playing": st["playing"], "bpm": st["bpm"], "song": st["song"], "transport": tr,
                 }, roles=("stage", "admin"))
