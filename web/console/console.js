@@ -213,43 +213,13 @@ function attachDrag(node, key) {
 }
 
 // ── aim: tap a card → conduct just that instrument ───────────────────────────
+// (the room cards are now the whole UI for this — tap to aim, tap again to clear)
 function setAim(key) {
   aimedGroup = key;
   const g = key && groups.find((x) => x.key === key);
   conn.send({ t: P.ADMIN_CMD, cmd: "aim", args: { section_id: g ? g.members[0].id : "all" } });
-  syncTarget();
   upsertCards();
 }
-function syncTarget() {
-  const g = aimedGroup && groups.find((x) => x.key === aimedGroup);
-  el("tctl").hidden = !g;
-  if (g) {
-    el("targetwho").innerHTML = `<span class="sw" style="background:${colorOf(g.instrument)}"></span>${g.instrument}` +
-      (g.members.length > 1 ? ` <span style="color:#b98c6a;font-size:.7em">(${g.members.map((m) => m.id).join("+")})</span>` : "");
-    el("targethint").textContent = "Wand gestures now shape only this instrument.";
-    el("vol").value = Math.round((g.members[0].volume ?? 1) * 100);
-    const muted = g.members.every((m) => m.muted);
-    el("mute").textContent = muted ? "Unmute" : "Mute";
-    el("mute").classList.toggle("on", muted);
-  } else {
-    el("targetwho").textContent = "everyone";
-    el("targethint").textContent = "Tap a card in the room to conduct just that instrument.";
-  }
-}
-el("vol").addEventListener("input", (e) => {
-  const g = aimedGroup && groups.find((x) => x.key === aimedGroup);
-  if (!g) return;
-  const v = (+e.target.value) / 100;
-  g.members.forEach((m) => { m.volume = v; conn.send({ t: P.ADMIN_CMD, cmd: "volume", args: { section_id: m.id, volume: v } }); });
-});
-el("mute").addEventListener("click", () => {
-  const g = aimedGroup && groups.find((x) => x.key === aimedGroup);
-  if (!g) return;
-  const to = !g.members.every((m) => m.muted);
-  g.members.forEach((m) => { m.muted = to; conn.send({ t: P.ADMIN_CMD, cmd: "mute", args: { section_id: m.id, muted: to } }); });
-  syncTarget();
-});
-el("unaim").addEventListener("click", () => setAim(null));
 
 // ── roster ───────────────────────────────────────────────────────────────────
 function renderRoster(m) {
@@ -270,7 +240,7 @@ function renderRoster(m) {
 
   rebuildGroups();
   // keep aim in sync if the aimed group vanished
-  if (aimedGroup && !groups.some((g) => g.key === aimedGroup)) { aimedGroup = null; syncTarget(); }
+  if (aimedGroup && !groups.some((g) => g.key === aimedGroup)) aimedGroup = null;
   upsertCards();
   el("roomqr").hidden = sections.length > 0 && el("roomqr").dataset.user !== "open";
   el("roomhint").hidden = sections.length === 0;

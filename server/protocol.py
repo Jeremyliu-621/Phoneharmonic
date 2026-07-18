@@ -15,12 +15,19 @@ WAND_IMU = "wand.imu"           # {seq, frames:[[tw_ms, ax,ay,az, gx,gy,gz], ...
 WAND_POSE = "wand.pose"         # {seq, frames:[[tw_ms, x, y, z, roll_deg], ...]}   CV (webcam) wand
 WAND_GRAB = "wand.grab"         # {state:"start"|"end", tw}
 WAND_FEEDBACK = "wand.feedback" # {value: 1|-1}
-WAND_RECAL = "wand.recal"       # {tw}
+WAND_RECAL = "wand.recal"       # {tw}        zero the aiming yaw
+WAND_TOUCH = "wand.touch"       # {pad:0-11, state:"down"|"up"}  MPR121 pads: 0-5 force a candidate
+WAND_RANGE = "wand.range"       # {mm}        ToF distance -> proximity tension (fx.tension)
+WAND_MODE = "wand.mode"         # {mode:"ai"|"det"}  physical toggle: gestures compose vs continuous control
+WAND_GESTURE = "wand.gesture"   # {label, strength?}  on-wand TinyML classification (optional path)
 STAGE_PLACE = "stage.place"     # {section_id, azimuth_deg, pos:[x,y,z]}
 STAGE_ASSIGN = "stage.assign"   # {section_id, instrument}
+STAGE_RECORD = "stage.record"   # {sha256, bytes, dur_s}  finished room recording -> ledger
 ADMIN_CMD = "admin.cmd"         # {cmd:"start"|"stop"|"clicktest"|"resync"|"allnotesoff"|"tempo"|"force", args?}
 SONG_LOAD = "song.load"         # {name, data}  data = base64 of a .mid file -> replaces the song
 SONG_EDIT = "song.edit"         # {song:{name,bpm,parts:[{instrument,is_drum,is_melody,notes:[[bar,on16,dur16,pitch,vel],...]}]}}
+SONG_HUM = "song.hum"           # {frames:[[t_ms, midi_float, rms], ...]}  hummed melody -> new song
+SONG_FILE = "song.file"         # {name}  load songs/<name>.mid from the server's disk
 CLOCK_REPORT = "clock.report"   # {theta, rtt}  section's own sync estimate (debug/health readout)
 
 # --- Server -> Client ---
@@ -31,7 +38,10 @@ SCHED_NOTES = "sched.notes"     # {events:[{id, section, at, dur, note, vel, art
 SCHED_CANCEL = "sched.cancel"   # {ids?:[...], section?, after?} | {allnotesoff:true}
 ROSTER = "roster"               # {playing, sections:[...], wand:{...}, engine:{...}}
 ENGINE_STATE = "engine.state"   # {last_choice, gesture, playing, bpm, song}  live, on each change
-WAND_STATE = "wand.state"       # {grabbed, aim_section, yaw_deg}   -> stage only, ~15 Hz
+WAND_STATE = "wand.state"       # {grabbed, aim_section, yaw_deg}   -> stage/admin, throttled
+ANNOUNCE = "announce"           # {text, audio_b64?, mime?}  commentator line -> stage/admin
+FX_TENSION = "fx.tension"       # {value: 0..1}  proximity build-up -> sections + stage
+FX_EXPR = "fx.expr"             # {section, semis, gain}  deterministic-mode expression warp
 ERR = "err"                     # {code, msg}
 
 # Special section id meaning "every section plays this event".

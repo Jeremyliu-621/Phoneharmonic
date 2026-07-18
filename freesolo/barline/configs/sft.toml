@@ -1,0 +1,17 @@
+# BAR-LINE model — stage 1: SFT on theory pairs + real MIDI arrangements.
+# Quote first:  flash train freesolo/barline/configs/sft.toml --cost
+# Data:         python server/tools/build_bar_dataset.py [--midi-dir songs/]
+#               (add a MIDI folder before the real run — phrasing data matters)
+
+model = "Qwen/Qwen3.5-4B"
+algorithm = "sft"
+
+[environment]
+id = "neuroscore/wand-barline"
+
+[train]
+epochs = 2
+max_examples = 4800          # rebuilt with harmonize as THE primary style
+lora_rank = 32
+lora_alpha = 64
+max_context_tokens = 1024

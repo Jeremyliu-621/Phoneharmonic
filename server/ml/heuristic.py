@@ -38,6 +38,11 @@ def rank(gf: GestureFeatures | None, candidate_types: list[str]) -> dict[str, fl
             s = 0.20 + 0.80 * energy_intent * flick
         elif t == "rhythmic_dense":
             s = 0.10 + 1.30 * energy_intent
+        elif t == "generated":
+            # A freshly model-written line (only offered when one has arrived):
+            # attractive for flowing mid-energy gestures, outbid by dense/counter
+            # at the extremes where the rule-based lines are the right answer.
+            s = 0.55 + 0.35 * energy_intent
         else:
             s = 0.0
         scores[t] = s

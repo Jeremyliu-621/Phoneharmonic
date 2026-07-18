@@ -52,7 +52,9 @@ def build_static_response(raw_path: str) -> Response:
 
     target = (WEB_DIR / rel).resolve()
 
-    # Directory -> redirect to the slash form, then serve its index.html.
+    # Directory -> its index.html. A directory URL without a trailing slash
+    # must redirect first, or the page's relative assets (./app.js) resolve to
+    # the parent and 404 — a page full of dead buttons.
     if target.is_dir():
         if not url_path.endswith("/"):
             return _redirect(url_path + "/")

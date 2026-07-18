@@ -1,0 +1,16 @@
+# DECISION model — stage 1: SFT imitation (heuristic + taste rules + play harvest).
+# Quote first:  flash train freesolo/decision/configs/sft.toml --cost
+# Data:         python server/tools/build_dataset.py   (rebuild + env push after playing!)
+
+model = "Qwen/Qwen3.5-2B"
+algorithm = "sft"
+
+[environment]
+id = "neuroscore/wand-decision"
+
+[train]
+epochs = 3
+max_examples = 2850          # = current train.jsonl row count; bump after re-harvest
+lora_rank = 32
+lora_alpha = 64
+max_context_tokens = 1024

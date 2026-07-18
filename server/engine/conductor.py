@@ -9,14 +9,21 @@ from __future__ import annotations
 
 import itertools
 import logging
+import math
 import secrets
 
+from config import MIN_LEAD_MS
 from engine.candidates import ART, GENERATORS, generate
+from engine.harmony import PAD_VEL, ROOT_VEL, bar_chords, chord_span, thin_grid, voice_lead
 from engine.song import builtin_song
-from engine.theory import midi_to_name
+from engine.theory import midi_to_name, triad, voice_triad
 from engine_api import CancelSpec, GestureWindow, NoteEvent, SectionInfo
 from gestures.features import GestureFeatures, extract_features
 from ml import heuristic
+from ml.barmodel import RemoteBarModel, style_for
+from ml.datalog import DecisionLog
+from ml.policy import RemoteModel, heuristic_decision
+from ml.schema import Decision, build_bar_context, build_context
 from protocol import SECTION_ALL
 
 log = logging.getLogger("engine")
@@ -34,6 +41,28 @@ class Conductor:
         self._gesture: GestureFeatures | None = None
         self._last_choice: str | None = None
         self._forced: str | None = None                 # editor override; None = let the ranker choose
+        self._aim: str | None = None                    # wand-aimed section (spatial/solo mode)
+        self._part_map: dict[int, str] | None = None    # LLM arranger: part idx -> section
+        self._pickup: list | None = None                # instant gesture answer, pending emission
+        self._arc = 0                                   # bars left in a build arc (0 = none)
+        self._arc_total = 4
+        self._arc_now = (1.0, 0.0, False)               # this bar's (vel_mult, density_floor, climax)
+        # The CONDUCTING ENVELOPE: a continuous intensity (0 hushed .. 1 full,
+        # 0.5 = the song exactly as written). Gestures push the target; the
+        # envelope chases it and both relax toward neutral over ~6-8 bars — so
+        # a wave swells the orchestra and it breathes back down, instead of an
+        # inserted "altered section". Drives density, dynamics, AND tempo.
+        self._intensity = 0.5
+        self._intensity_target = 0.5
+        self.base_bpm = self.bpm                        # the song's own tempo (rubato pivots here)
+        self._chords = bar_chords(self.song)
+        self._pad_voices: list[int] | None = None
+        self._pad_until = -1
+        self._model = RemoteModel()                     # trained policy (WM_MODEL_URL); optional
+        self._barmodel = RemoteBarModel()               # trained line writer (WM_BARMODEL_URL)
+        self._decision: Decision | None = None          # the policy's active answer, until the next gesture
+        self._last_source = "heuristic"
+        self._datalog = DecisionLog()
         self._sections: list[SectionInfo] = []
         self._cancels: list[CancelSpec] = []
         self._ids = itertools.count(1)
@@ -44,13 +73,10 @@ class Conductor:
         self._tracks: list[dict] = []                    # parts of a loaded MIDI (for the editor)
         self._reanchor = False                           # re-align the bar cursor on the next pull
         self._anchor_ms = 0.0                            # server-ms of bar 0 (drives the editor playhead)
-        self._gesture_shift = 0                          # global octave shift (non-aimed gestures)
-        self._aimed: str | None = None                   # section the wand/editor is conducting (None = all)
-        self._part: dict[str, str] = {}                  # section_id -> pinned candidate (set by aiming)
-        self._part_shift: dict[str, int] = {}            # section_id -> pinned octave shift
 
     def load_song(self, song, tracks: list[dict] | None = None) -> None:
         """Replace the song and restart it cleanly from bar 0 (a freshly dropped MIDI)."""
+        self._part_map = None                   # a new song gets a fresh arrangement
         self.update_song(song, tracks, reanchor=True, set_tempo=True)
         self._last_choice = None
         log.info("loaded song '%s': %d bars, key=%d, %d parts",
@@ -62,6 +88,9 @@ class Conductor:
         a live edit takes effect on the next bar rather than restarting playback."""
         self.song = song
         self._tracks = tracks or []
+        self._chords = bar_chords(song)         # harmony follows every song change
+        self._pad_voices = None                 # pad layer re-voices fresh
+        self._pad_until = -1
         if set_tempo:
             self.set_tempo(song.bpm)
         if reanchor:
@@ -69,7 +98,8 @@ class Conductor:
 
     # --- editor controls ---
     def set_tempo(self, bpm: float) -> None:
-        self.bpm = max(40.0, min(220.0, bpm))
+        self.base_bpm = max(40.0, min(220.0, bpm))
+        self.bpm = self.base_bpm
         self.bar_ms = 60_000.0 / self.bpm * 4
         self.s16_ms = self.bar_ms / 16
 
@@ -94,13 +124,16 @@ class Conductor:
             "bpm": round(self.bpm),
             "forced": self._forced or "auto",
             "last_choice": self._last_choice,
-            "candidates": list(GENERATORS),
+            "decision_source": self._last_source,
+            "intensity": round(self._intensity, 3),
+            "candidates": list(GENERATORS) + (["generated"] if self._barmodel.configured else []),
+            "training_rows": self._datalog.rows,
             "gesture": self._gesture.as_dict() if self._gesture else None,
             "song": self.song.name,
             "key_root": self.song.key_root,
             "bars": len(self.song.bars),
             "tracks": tracks,
-            "aimed": self._aimed,
+            "aimed": self._aim,
             # Lets the editor draw a smooth playhead from its own synced clock:
             # pos16 = ((clock.serverNow() - anchor) / s16_ms) mod (n_bars*16).
             "transport": {"playing": self._playing, "anchor": self._anchor_ms,
@@ -111,13 +144,19 @@ class Conductor:
     # --- transport ---
     def on_transport(self, cmd: str, t0_ms: float | None) -> None:
         if cmd in ("start", "clicktest"):
+            if self._playing:                    # restart: silence the old timeline first
+                self._cancels.append(CancelSpec(allnotesoff=True))
             self._playing = True
+            self._reanchor = False               # start's clean anchor wins over a pending reanchor
             self._next_bar_idx = 0
             self._next_bar_start = t0_ms or 0.0
             self._anchor_ms = self._next_bar_start
             self._reanchor = False   # a fresh start supersedes a pending load re-anchor
             log.info("transport start @%.0f  bar=%.0fms (%.0f BPM)",
                      self._next_bar_start, self.bar_ms, self.song.bpm)
+        elif cmd in ("rewind", "forward"):       # palm-swipe time jump, beat-locked
+            self._next_bar_idx = max(0, self._next_bar_idx + (-4 if cmd == "rewind" else 4))
+            log.info("timeline %s -> bar %d", cmd, self._next_bar_idx)
         elif cmd in ("stop", "allnotesoff"):
             self._playing = False
             self._cancels.append(CancelSpec(allnotesoff=True))
@@ -126,39 +165,115 @@ class Conductor:
     def on_sections_changed(self, sections: list[SectionInfo]) -> None:
         self._sections = [s for s in sections if s.ready]
 
+    # Preset feature vectors for on-wand TinyML labels: firmware that classifies
+    # locally can skip streaming a window and just name the motion. The label
+    # becomes the same 5-feature intent the raw path extracts, so both firmware
+    # styles drive the identical decision pipeline.
+    _CLASSIFIED = {
+        "sharp_up":   GestureFeatures(energy=0.9, size=0.7, vertical=0.9, duration=0.3),
+        "sharp_down": GestureFeatures(energy=0.9, size=0.7, vertical=-0.9, duration=0.3),
+        "swish":      GestureFeatures(energy=0.7, size=0.7, duration=0.8),
+        "twist":      GestureFeatures(energy=0.5, size=0.4, rotation=0.9, duration=0.7),
+        "still":      GestureFeatures(energy=0.05, size=0.05, duration=1.0),
+        "flick":      GestureFeatures(energy=0.6, size=0.3, duration=0.3),
+    }
+
     def on_gesture(self, window: GestureWindow) -> None:
-        self._gesture = extract_features(window)
-        choice = heuristic.choose(heuristic.rank(self._gesture, list(GENERATORS)), self._last_choice)
-        shift = heuristic.octave_shift(self._gesture)
-        if self._aimed:                                  # shape only the aimed instrument
-            self._part[self._aimed] = choice
-            self._part_shift[self._aimed] = shift
-            log.info("gesture -> %s on %s (aimed)", choice, self._aimed)
-        else:                                            # shape the whole accompaniment
-            self._last_choice = choice
-            self._gesture_shift = shift
-            log.info("gesture -> %s (all)", choice)
+        self._gesture_in(extract_features(window), window.t_end_server_ms)
+
+    def on_classified(self, label: str, strength: float, server_ms: float) -> None:
+        """A TinyML-classified gesture from the wand itself (wand.gesture)."""
+        preset = self._CLASSIFIED.get(label)
+        if preset is None:
+            log.info("unknown classified gesture %r ignored", label)
+            return
+        s = max(0.2, min(1.5, strength or 1.0))
+        self._gesture_in(GestureFeatures(
+            energy=min(1.0, preset.energy * s), size=min(1.0, preset.size * s),
+            vertical=preset.vertical, rotation=min(1.0, preset.rotation * s),
+            duration=preset.duration), server_ms)
+
+    def _gesture_in(self, features: GestureFeatures, t_end_ms: float) -> None:
+        self._gesture = features
+        # Push the conducting envelope: the gesture's vigor becomes the target
+        # intensity the orchestra chases (and then relaxes from).
+        self._intensity_target = max(0.0, min(1.0, 0.6 * features.energy + 0.4 * features.size))
+        log.info("gesture -> %s (intensity target %.2f)",
+                 {k: round(v, 2) for k, v in features.as_dict().items()}, self._intensity_target)
+        # A SWELL (slow, sustained lift) arms a planned multi-bar arc: the next
+        # bars ramp density + velocity and land on a climax crash. One decision,
+        # deterministic execution — latency only gates when it starts, not how
+        # long it lasts.
+        if features.vertical > 0.6 and features.energy > 0.45 and features.duration > 0.8:
+            self._arc = self._arc_total
+            log.info("build arc armed: %d bars to climax", self._arc)
+        self._decision = None                    # new intent — the model must re-decide
+        self._model.request(self._context())
+        self._queue_pickup(t_end_ms)
+
+    def _arc_step(self) -> tuple[float, float, bool]:
+        """Advance the build arc one bar: (vel_mult, density_floor, climax)."""
+        if self._arc <= 0:
+            return (1.0, 0.0, False)
+        p = 1.0 - (self._arc - 1) / self._arc_total   # 0.25 -> 0.5 -> 0.75 -> 1.0
+        self._arc -= 1
+        return (0.8 + 0.5 * p, min(1.0, 0.35 + 0.75 * p), p >= 1.0)
 
     def on_grab(self, kind: str, server_ms: float) -> None:
         pass  # grab edges could cut sustains; not needed for the slice
 
+    def _queue_pickup(self, t_end_ms: float) -> None:
+        """The room answers a gesture right away, on the next 8th-note. A sharp
+        DRAMATIC motion (fast + short = a stab) gets a fortissimo two-octave
+        chord sting with a crash; anything gentler gets a quick low-velocity
+        flourish. The full musical response still lands at the bar line."""
+        if not self._playing:
+            return
+        eighth = self.bar_ms / 8
+        bar_start = self._next_bar_start - self.bar_ms
+        at = bar_start + math.ceil((t_end_ms + 60.0 - bar_start) / eighth) * eighth
+        chord = self.song.bar(max(0, self._next_bar_idx - 1)).chord_pcs
+        g = self._gesture
+        if g is not None and g.energy > 0.65 and 0.0 < g.duration < 0.6:   # the sting
+            stab = voice_triad(chord, base=52) + voice_triad(chord, base=64)
+            self._pickup = [(at, eighth, m, 0.95, "pluck") for m in stab]
+            self._pickup.append((at, eighth, 49, 0.9, "drum"))             # crash
+        else:                                                              # the flourish
+            vel = round(0.25 + 0.5 * (g.energy if g else 0.3), 3)
+            self._pickup = [(at + i * eighth / 4, eighth / 4, m, vel, "pluck")
+                            for i, m in enumerate(voice_triad(chord, base=64))]
+
     def on_aim(self, section_id: str | None) -> None:
-        self._aimed = section_id or None
-        log.info("aim -> %s", self._aimed or "all")
+        # Engaging solo cuts every OTHER phone's in-flight notes immediately —
+        # isolation is heard in ~one scheduler tick, not at the next bar line.
+        # Releasing solo lets the room come back on the beat (no cancels).
+        if (section_id and section_id != self._aim and self._playing
+                and any(s.section_id == section_id for s in self._sections)):
+            for s in self._sections:
+                if s.section_id != section_id:
+                    self._cancels.append(CancelSpec(section=s.section_id))
+        self._aim = section_id
 
     def on_feedback(self, value: int) -> None:
-        log.info("feedback %+d (ranker training wired in P5)", value)
+        self._datalog.feedback(value)
+        log.info("feedback %+d (logged as a training signal)", value)
 
     # --- event pull ---
     def get_events(self, now_ms: float, until_ms: float) -> list[NoteEvent]:
         if not self._playing:
             return []
         if self._reanchor:                       # a freshly loaded song starts here
-            self._next_bar_start = now_ms + 100.0
+            # Must clear MIN_LEAD_MS or the new song's downbeat gets dropped.
+            self._next_bar_start = now_ms + max(2 * MIN_LEAD_MS, 400.0)
             self._next_bar_idx = 0
             self._anchor_ms = self._next_bar_start
             self._reanchor = False
         events: list[NoteEvent] = []
+        if self._pickup:                         # instant gesture answer, once
+            for (at, dur, midi, vel, art) in self._pickup:
+                if at >= now_ms + MIN_LEAD_MS:
+                    events.append(self._note(SECTION_ALL, at, dur, midi, vel, art))
+            self._pickup = None
         while self._next_bar_start <= until_ms:
             if self._next_bar_start >= now_ms - self.bar_ms:
                 events.extend(self._bar_events(self._next_bar_idx, self._next_bar_start))
@@ -170,111 +285,256 @@ class Conductor:
         out, self._cancels = self._cancels, []
         return out
 
+    # --- decision policy ---
+    def _context(self, idx: int | None = None) -> dict:
+        bar = self.song.bar(self._next_bar_idx if idx is None else idx)
+        return build_context(key_root=self.song.key_root, bpm=self.bpm,
+                             chord_root=bar.chord_root, chord_minor=bar.chord_minor,
+                             last_choice=self._last_choice, gesture=self._gesture)
+
+    def _decide(self, idx: int, cands: dict) -> Decision:
+        """Editor override > active model answer > heuristic — always instantly
+        playable, so the network can only add intelligence, never stall a bar.
+        Every (context, decision) pair becomes a logged training row."""
+        ctx = self._context(idx)
+        if self._forced and self._forced in cands:
+            decision = Decision(candidate=self._forced,
+                                octave_shift=heuristic.octave_shift(self._gesture) // 12,
+                                source="forced")
+        else:
+            fresh = self._model.take()
+            if fresh is not None:
+                self._decision = fresh
+            if self._decision is not None and self._decision.candidate in cands:
+                decision = self._decision
+            else:
+                decision = heuristic_decision(self._gesture, self._last_choice, list(cands))
+        self._last_choice = decision.candidate
+        self._last_source = decision.source
+        self._datalog.decision(bar=idx, song=self.song.name, context=ctx, decision=decision)
+        return decision
+
+    def _take_generated(self, idx: int, cands: dict) -> None:
+        """Add the bar model's prefetched line (if one landed for this bar) and
+        request TWO bars ahead — measured serving latency for a composed bar is
+        ~4.6s, so the request needs two bars of playing time (~4.8s at 100 BPM)
+        to land. A faster serving host can drop this back to one."""
+        line = self._barmodel.take(idx)
+        if line:
+            cands["generated"] = line
+        if self._barmodel.configured:
+            tgt, prev = self.song.bar(idx + 2), self.song.bar(idx + 1)
+            # On a real song the model's one job is chord theory: harmonize.
+            style = "harmonize" if self.song.parts else style_for(self._gesture)
+            self._barmodel.prefetch(idx + 2, build_bar_context(
+                key_root=self.song.key_root, bpm=self.bpm,
+                chord_root=tgt.chord_root, chord_minor=tgt.chord_minor,
+                style=style,
+                melody=tgt.melody, prev_melody=prev.melody), self.song.key_root)
+
     # --- bar generation ---
     def _bar_events(self, idx: int, bar_start: float) -> list[NoteEvent]:
+        self._arc_now = self._arc_step()
+        # Advance the conducting envelope one bar: chase the gesture's target,
+        # while the target itself relaxes toward neutral. ~2 bars to arrive,
+        # ~6-8 bars to breathe back — phrasing, not a step function.
+        self._intensity += (self._intensity_target - self._intensity) * 0.5
+        self._intensity_target += (0.5 - self._intensity_target) * 0.18
+        if abs(self._intensity - 0.5) < 0.03 and self._gesture is not None:
+            self._gesture = None                 # fully relaxed: the cue is over
+            self._decision = None
+        # Rubato: the tempo leans with the conductor (±6% around the song's own).
+        self.bpm = self.base_bpm * (1 + (self._intensity - 0.5) * 0.12)
+        self.bar_ms = 60_000.0 / self.bpm * 4
+        self.s16_ms = self.bar_ms / 16
         if self.song.parts:                      # a loaded MIDI: play its arrangement
             return self._arrangement_events(idx, bar_start)
         bar = self.song.bar(idx)
         prev = self.song.bar(idx - 1)
         cands = generate(bar, prev, self.song.key_root)
+        self._take_generated(idx, cands)
+
+        decision = self._decide(idx, cands)
+        choice, shift = decision.candidate, decision.semitones()
+
+        responder = cands[choice]
+        art = ART.get(choice, "pluck")
         events: list[NoteEvent] = []
 
-        # Global accompaniment choice: editor force > last non-aimed gesture > pad.
-        gchoice = self._forced if (self._forced and self._forced in cands) else (self._last_choice or "sustained")
-        if gchoice not in cands:
-            gchoice = "sustained"
-        self._last_choice = self._last_choice or gchoice
-        melody_notes = [(on, dur, midi, 0.9) for (on, dur, midi) in bar.melody]
+        # Distribute parts so multiple phones are genuinely different instruments:
+        #   2+ sections -> section[0] plays melody, the rest play the accompaniment
+        #                  (wand aim overrides: the aimed phone carries the line solo)
+        #   1 section   -> it plays both
+        #   0 sections  -> laptop (stage) plays everything via SECTION_ALL
+        n = len(self._sections)
+        aim = self._aim if any(s.section_id == self._aim for s in self._sections) else None
+        if n >= 2 and aim:
+            melody_sec = next(s.section_id for s in self._sections if s.section_id != aim)
+            responder_secs = [aim]
+        elif n >= 2:
+            melody_sec = self._sections[0].section_id
+            responder_secs = [s.section_id for s in self._sections[1:]]
+        elif n == 1:
+            melody_sec = self._sections[0].section_id
+            responder_secs = [melody_sec]
+        else:
+            melody_sec = SECTION_ALL
+            responder_secs = [SECTION_ALL]
 
-        sections = self._sections
-        if not sections:
-            # Laptop-only: melody + global accompaniment on the shared stream.
-            self._emit(events, None, cands[gchoice], bar_start, ART.get(gchoice, "pluck"), self._gesture_shift)
-            self._emit(events, None, melody_notes, bar_start, "pluck", 0)
-            return events
+        vel_mult, _floor, climax = self._arc_now
+        for (on, dur, midi, vel) in responder:
+            at, d, note = bar_start + on * self.s16_ms, dur * self.s16_ms, _clampmidi(midi + shift)
+            for sec in responder_secs:
+                events.append(self._note(sec, at, d, note, min(1.0, vel * vel_mult), art))
 
-        # Each instrument plays its own part: a pinned candidate if it was aimed +
-        # shaped, else the lead plays the melody and everyone else the global
-        # accompaniment. Per-section volume/mute applied in _emit.
-        for i, s in enumerate(sections):
-            pinned = self._part.get(s.section_id)
-            if pinned is not None and pinned in cands:
-                notes, art, shift = cands[pinned], ART.get(pinned, "pluck"), self._part_shift.get(s.section_id, 0)
-            elif i == 0:
-                notes, art, shift = melody_notes, "pluck", 0
-            else:
-                notes, art, shift = cands[gchoice], ART.get(gchoice, "pluck"), self._gesture_shift
-            self._emit(events, s, notes, bar_start, art, shift)
+        for (on, dur, midi) in bar.melody:
+            events.append(self._note(melody_sec, bar_start + on * self.s16_ms,
+                                     dur * self.s16_ms, midi, 0.9, "pluck"))
+        if climax:                               # the arc lands: a crash on the downbeat
+            events.append(self._note(SECTION_ALL, bar_start, self.s16_ms * 2, 49, 0.95, "drum"))
 
-        log.info("bar %d: %d sections, global=%s, pinned=%s", idx, len(sections), gchoice, self._part or "-")
+        log.info("bar %d -> %s [%s] (%d notes, shift %+d, %d sections)",
+                 idx, choice, decision.source, len(responder), shift, n)
         return events
 
-    def _emit(self, events, sinfo, notes, bar_start, art, shift):
-        """Emit `notes` for a section (None -> SECTION_ALL / laptop), applying its
-        volume and mute."""
-        if sinfo is not None and (sinfo.muted or sinfo.volume <= 0.001):
-            return
-        section = SECTION_ALL if sinfo is None else sinfo.section_id
-        vol = 1.0 if sinfo is None else sinfo.volume
-        for (on, dur, midi, vel) in notes:
-            events.append(self._note(section, bar_start + on * self.s16_ms, dur * self.s16_ms,
-                                     _clampmidi(midi + shift), max(0.05, vel * vol), art))
+    def _shape(self, notes: list, keep: float, vel_scale: float, shift: int,
+               is_drum: bool) -> list:
+        """Bend one part's bar to the current envelope: `keep` is the fraction
+        of notes that survive (the structurally strongest: long, loud,
+        on-beat), `vel_scale` the dynamics, `shift` the register (never for
+        drums). The build arc's floor/multiplier ride on top."""
+        arc_mult, arc_floor, _climax = self._arc_now
+        keep = max(keep, arc_floor)
+        vel_scale *= arc_mult
+        if keep <= 0.0 or not notes:
+            return []
+        if keep >= 1.0:
+            kept = list(notes)
+        else:
+            ranked = sorted(notes, key=lambda nt: nt[1] * 2 + nt[3] * 4 + (2 if nt[0] % 4 == 0 else 0),
+                            reverse=True)
+            kept = sorted(ranked[:max(1, round(len(notes) * keep))])
+        if is_drum:
+            shift = 0
+        return [(on, dur, midi + shift, min(1.0, vel * vel_scale))
+                for (on, dur, midi, vel) in kept]
 
-    def _part_targets(self, i: int, part) -> list[SectionInfo | None]:
-        """All sections that should sound part i: every phone assigned this part's
-        instrument (doubled phones play in unison), else index round-robin as a
-        fallback so nothing is silent. No phones -> [None] = the laptop plays it."""
-        if not self._sections:
-            return [None]
-        matched = [s for s in self._sections if s.instrument == part.instrument]
-        return matched or [self._sections[i % len(self._sections)]]
+    def set_part_assignment(self, mapping: dict[str, list[int]] | None) -> None:
+        """LLM-arranger routing: section_id -> part indices. None = round-robin."""
+        self._part_map = {}
+        for sid, idxs in (mapping or {}).items():
+            for i in idxs:
+                self._part_map[int(i)] = sid
+        if not self._part_map:
+            self._part_map = None
+        log.info("part assignment: %s", mapping or "round-robin")
 
     def _arrangement_events(self, idx: int, bar_start: float) -> list[NoteEvent]:
-        """Play a loaded MIDI's parts across sections by instrument assignment
-        (a part sounds on EVERY phone assigned to it — that's how two phones
-        double one instrument; laptop plays all via SECTION_ALL if no phones),
-        plus the gesture layer riding on the lead."""
+        """The approved conducting vocabulary, and nothing else:
+        neutral = the file verbatim; calm = HUSH (beat-grid simplification,
+        softer); lift = HARMONY (voice-led chord pads + cello root, re-struck
+        only on chord changes — the model's generated layer when one arrived,
+        the deterministic theory otherwise). Tempo rubato rides the envelope.
+        Part map routes parts; aiming SOLOS a phone; drums never transpose."""
+        i9 = self._intensity
+        calm = max(0.0, 0.5 - i9) * 2            # 0..1 below neutral
+        lift = max(0.0, i9 - 0.5) * 2            # 0..1 above neutral
+        arc_mult, arc_floor, _climax = self._arc_now
+        lift = max(lift, arc_floor)              # a build arc is a sustained push
+        neutral = calm < 0.06 and lift < 0.06 and not self._forced
+        thin_level = 0 if calm < 0.2 else (1 if calm < 0.6 else 2)
+        vel_scale = (1.0 - 0.45 * calm) * (1.0 + 0.35 * lift) * arc_mult
+
+        gen_line = None
+        if neutral:
+            self._last_choice = None
+        else:
+            bar, prev = self.song.bar(idx), self.song.bar(idx - 1)
+            cands = generate(bar, prev, self.song.key_root)
+            self._take_generated(idx, cands)     # prefetches "harmonize" for idx+2
+            gen_line = cands.get("generated")
+            self._decide(idx, cands)             # the trained policy + training rows
+
         events: list[NoteEvent] = []
         n = len(self._sections)
-        melody_info = None
+        by_id = {s.section_id: s for s in self._sections}
+        solo = self._aim if self._aim in by_id else None
         for i, part in enumerate(self.song.parts):
-            targets = self._part_targets(i, part)
-            if part.is_melody:
-                melody_info = targets[0]
-            notes = part.bars[idx % len(part.bars)]
-            for sinfo in targets:
+            # Routing priority: explicit LLM part map > instrument match (every
+            # phone assigned this part's instrument plays it — that's how two
+            # phones DOUBLE one section, in unison) > index round-robin so
+            # nothing is silent > laptop via SECTION_ALL when no phones.
+            if self._part_map and i in self._part_map and self._part_map[i] in by_id:
+                secs = [self._part_map[i]]
+            elif n == 0:
+                secs = [SECTION_ALL]
+            else:
+                matched = [s.section_id for s in self._sections if s.instrument == part.instrument]
+                secs = matched or [self._sections[i % n].section_id]
+            if solo:
+                secs = [s for s in secs if s == solo]
+                if not secs:
+                    continue                     # isolation: only the aimed phone sounds
+            raw = part.bars[idx % len(part.bars)]
+            if neutral:
+                notes = raw
+            elif part.is_melody:
+                notes = [(on, dur, m, min(1.0, v * max(0.9, vel_scale)))
+                         for (on, dur, m, v) in raw]
+            else:
+                # Drums hush one level harder — a calm room drops toward the kick.
+                lvl = min(2, thin_level + 1) if (part.is_drum and thin_level) else thin_level
+                notes = [(on, dur, m, min(1.0, v * vel_scale))
+                         for (on, dur, m, v) in thin_grid(raw, lvl)]
+            for sec in secs:
+                sinfo = by_id.get(sec)
                 if sinfo is not None and (sinfo.muted or sinfo.volume <= 0.001):
-                    continue
-                sec = SECTION_ALL if sinfo is None else sinfo.section_id
-                vol = 1.0 if sinfo is None else sinfo.volume
+                    continue                     # per-phone mute/volume (console target panel)
+                svol = 1.0 if sinfo is None else sinfo.volume
                 for (on, dur, midi, vel) in notes:
-                    # Drum notes carry art="drum": the synth plays them as percussion
-                    # by MIDI drum-map pitch, independent of the section's timbre.
                     art = "drum" if part.is_drum else ("sustain" if dur >= 8 else "pluck")
+                    # Drum-map pitches are identifiers, not pitches - never clamp/fold them.
                     midi_out = midi if part.is_drum else _clampmidi(midi)
                     events.append(self._note(sec, bar_start + on * self.s16_ms,
-                                             dur * self.s16_ms, midi_out, max(0.08, vel * vol), art))
+                                             dur * self.s16_ms, midi_out, max(0.12, vel * svol), art,
+                                             inst=part.instrument))
 
-        # Gesture/editor accompaniment layer, riding on the lead instrument.
-        bar, prev = self.song.bar(idx), self.song.bar(idx - 1)
-        cands = generate(bar, prev, self.song.key_root)
-        gchoice = self._forced if (self._forced and self._forced in cands) else (self._last_choice or "sustained")
-        if gchoice not in cands:
-            gchoice = "sustained"
-        self._last_choice = self._last_choice or gchoice
-        if not (melody_info is not None and (melody_info.muted or melody_info.volume <= 0.001)):
-            msec = SECTION_ALL if melody_info is None else melody_info.section_id
-            mvol = 1.0 if melody_info is None else melody_info.volume
-            for (on, dur, midi, vel) in cands[gchoice]:
-                events.append(self._note(msec, bar_start + on * self.s16_ms, dur * self.s16_ms,
-                                         _clampmidi(midi + self._gesture_shift), vel * 0.7 * mvol,
-                                         ART.get(gchoice, "pluck")))
-        log.info("bar %d arrangement: %d parts -> %d sections, overlay=%s", idx, len(self.song.parts), n, gchoice)
+        # HARMONY on a push: held, voice-led chords that re-strike only when the
+        # song's harmony changes. The trained model's line takes the seat when
+        # one landed (sanitized, so it can only be chord-tones-in-register);
+        # the deterministic theory below is the ever-present fallback.
+        if lift > 0.2:
+            chord = self._chords[idx % len(self._chords)]
+            pad_vel = PAD_VEL * (0.5 + 0.5 * lift)
+            if gen_line and lift > 0.25:
+                for (on, dur, midi, vel) in gen_line[:5]:
+                    events.append(self._note(SECTION_ALL, bar_start + on * self.s16_ms,
+                                             dur * self.s16_ms, midi, min(vel, pad_vel * 1.4),
+                                             "sustain", inst="viola"))
+                self._pad_until = idx
+            elif idx > self._pad_until or self._chords[(idx - 1) % len(self._chords)] != chord:
+                span = chord_span(self._chords, idx % len(self._chords))
+                self._pad_voices = voice_lead(self._pad_voices, triad(*chord))
+                dur_ms = span * self.bar_ms * 0.98
+                for v in self._pad_voices:
+                    events.append(self._note(SECTION_ALL, bar_start, dur_ms, v,
+                                             pad_vel, "sustain", inst="viola"))
+                events.append(self._note(SECTION_ALL, bar_start, dur_ms, 36 + chord[0],
+                                         ROOT_VEL * (0.5 + 0.5 * lift), "sustain", inst="cello"))
+                self._pad_until = idx + span - 1
+        else:
+            self._pad_until = -1                 # released: next push re-voices fresh
+
+        log.info("bar %d arrangement: i=%.2f %s (%d parts -> %d sections)%s",
+                 idx, i9,
+                 "verbatim" if neutral else ("hush" if calm >= lift else "harmony"),
+                 len(self.song.parts), n, f", solo={solo}" if solo else "")
         return events
 
-    def _note(self, section: str, at: float, dur: float, midi: int, vel: float, art: str) -> NoteEvent:
+    def _note(self, section: str, at: float, dur: float, midi: int, vel: float, art: str,
+              inst: str | None = None) -> NoteEvent:
         return NoteEvent(id=f"n{self._id_boot}-{next(self._ids)}", section=section, at=at, dur=dur,
-                         note=midi_to_name(midi), vel=round(vel, 3), art=art)
+                         note=midi_to_name(midi), vel=round(vel, 3), art=art, inst=inst)
 
 
 def _clampmidi(m: int) -> int:

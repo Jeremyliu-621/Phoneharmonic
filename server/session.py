@@ -44,6 +44,7 @@ class Section:
     ready: bool = False
     volume: float = 1.0
     muted: bool = False
+    dropped_at: float | None = None   # epoch s of disconnect (grace-period pruning)
 
 
 @dataclass
@@ -51,6 +52,8 @@ class WandSlot:
     connected: bool = False
     variant: str = "none"     # "sim" | "hw" | "none"
     aim_mode: str = "cycle"   # "cycle" (tap to select) | "yaw" (pointing)
+    mode: str = "ai"          # "ai" (gestures compose) | "det" (continuous control)
+    det_param: str = "pitch"  # what det-mode height controls: "pitch" | "volume" | "filter"
 
 
 @dataclass
@@ -148,6 +151,30 @@ class SessionState:
         best = min(placed, key=lambda s: ang_dist(s.azimuth_deg, yaw_deg))
         return best.section_id if ang_dist(best.azimuth_deg, yaw_deg) <= max_gap_deg else None
 
+    # --- persistence: instruments/placement survive a server restart ---
+    def to_dict(self) -> dict:
+        return {"next": self._next_section_num,
+                "sections": [{"section_id": s.section_id, "client_id": s.client_id,
+                              "instrument": s.instrument, "azimuth_deg": s.azimuth_deg,
+                              "px": s.px, "py": s.py, "placed": s.placed,
+                              "volume": s.volume, "muted": s.muted}
+                             for s in self.sections.values()]}
+
+    def restore(self, data: dict) -> None:
+        """Rebuild the roster from a saved snapshot: every slot starts dropped;
+        a phone rejoining with its stored client_id rebinds its old seat."""
+        import time
+        self._next_section_num = int(data.get("next", 1))
+        for row in data.get("sections", []):
+            s = Section(section_id=row["section_id"], client_id=row["client_id"],
+                        instrument=row.get("instrument", "synth"),
+                        azimuth_deg=float(row.get("azimuth_deg", 0.0)),
+                        px=float(row.get("px", 0.0)), py=float(row.get("py", 0.9)),
+                        placed=bool(row.get("placed", False)),
+                        volume=float(row.get("volume", 1.0)), muted=bool(row.get("muted", False)),
+                        connected=False, ready=False, dropped_at=time.time())
+            self.sections[s.section_id] = s
+
     def engine_sections(self) -> list[SectionInfo]:
         return [
             SectionInfo(s.section_id, s.instrument, s.azimuth_deg, s.ready, s.volume, s.muted)
@@ -177,5 +204,7 @@ class SessionState:
                 "connected": self.wand.connected,
                 "variant": self.wand.variant,
                 "aim_mode": self.wand.aim_mode,
+                "mode": self.wand.mode,
+                "det_param": self.wand.det_param,
             },
         }

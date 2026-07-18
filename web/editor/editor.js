@@ -21,6 +21,7 @@ const TRACK_COLORS = ["#d9534a", "#e8a13c", "#57a639", "#8e5bd4", "#4a76d8", "#2
 const NICE = {
   auto: "Auto", lower_imitation: "Lower imitation", contrary_motion: "Contrary motion",
   sustained: "Sustained chord", delayed: "Delayed echo", rhythmic_dense: "Rhythmic (busy)", rest: "Rest (silence)",
+  generated: "AI-written line",
 };
 
 // ---- piano roll ----
@@ -234,7 +235,10 @@ conn.on(P.ERR, (m) => {
 // ---- roster + engine state ----
 function applyEngineCommon(eng) {
   if (eng.candidates) renderCandidates(eng.candidates);
-  el("nowplaying").textContent = eng.last_choice ? (NICE[eng.last_choice] || eng.last_choice) : "—";
+  const brain = eng.decision_source ? ` · ${eng.decision_source} brain` : "";
+  const rows = eng.training_rows ? ` · ${eng.training_rows} rows logged` : "";
+  el("nowplaying").textContent =
+    (eng.last_choice ? (NICE[eng.last_choice] || eng.last_choice) : "—") + brain + rows;
   const g = eng.gesture;
   for (const k of ["energy", "size", "vertical", "rotation"]) el("g_" + k).textContent = g ? g[k].toFixed(2) : "—";
   if (eng.transport) transport = eng.transport;

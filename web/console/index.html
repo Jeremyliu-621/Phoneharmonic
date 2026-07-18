@@ -55,7 +55,7 @@
     #nav a:hover { color: var(--ink); background: var(--card-deep); }
 
     /* ═══ main: score | playground | wand ═══ */
-    #main { display: grid; grid-template-columns: 240px 1fr 280px; gap: 10px; padding: 10px; min-height: 0; }
+    #main { display: grid; grid-template-columns: 200px 1fr 168px; gap: 10px; padding: 10px; min-height: 0; }
     .side { min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
     .ph { font: 700 10px var(--px-display); letter-spacing: .08em; text-transform: uppercase;
       color: var(--ink); padding: .65rem .75rem .45rem; display: flex; justify-content: space-between;
@@ -191,29 +191,6 @@
     .gbar.g-lift .fill { --bar: var(--blue); }
     .gbar.g-swirl .fill { --bar: #8e5bd4; }
 
-    #target { margin: .55rem 0 0; padding: .55rem .6rem .6rem; border: 2px solid var(--card-deep);
-      border-radius: 9px; background: #fdfaf2; }
-    #target .who { font: 700 15px var(--px-body); color: var(--ink); text-transform: capitalize; }
-    #target .who .sw { display: inline-block; width: 11px; height: 11px; border-radius: 3px;
-      border: 1.5px solid var(--ink); margin-right: 6px; }
-    #target .hint { font-size: 12px; color: var(--ink-soft); line-height: 1.4; margin-top: .2rem; }
-    #tctl { display: flex; align-items: center; gap: .5rem; margin-top: .5rem; }
-    #tctl label { display: flex; align-items: center; gap: .4rem; flex: 1;
-      font: 700 8px var(--px-display); text-transform: uppercase; color: var(--ink-soft); }
-    #tctl input[type=range] { flex: 1; accent-color: var(--purple); min-width: 0; }
-    .sbtn { font: 700 9px var(--px-display); text-transform: uppercase; color: var(--ink);
-      background: var(--card); cursor: pointer; border: 2px solid var(--ink); border-radius: 7px;
-      padding: .35rem .5rem; box-shadow: 2px 2px 0 rgba(54,38,25,.18); }
-    .sbtn:active { transform: translate(1px, 1px); box-shadow: none; }
-    .sbtn.on { background: var(--ink); color: var(--card); }
-
-    #tip { display: flex; gap: .6rem; align-items: center; margin-top: .55rem; padding: .5rem .6rem;
-      border: 2px solid var(--card-deep); border-radius: 9px; background: #fdfaf2; }
-    #tip img { width: 44px; height: auto; flex: none; }
-    #tip .tx { font-size: 12px; color: var(--ink-soft); line-height: 1.4; }
-    #tip .tx b { color: var(--purple); font-family: var(--px-display); font-size: 8px;
-      text-transform: uppercase; letter-spacing: .1em; display: block; margin-bottom: 2px; }
-
     #status { margin-top: .55rem; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: .4rem; }
     #status .cell { padding: .45rem .3rem; border-radius: 8px; border: 2px solid var(--card-deep);
       background: #fdfaf2; text-align: center; }
@@ -322,22 +299,6 @@
         <div class="gbar g-size"><div class="lbl">size <b id="v-size">0.00</b></div><div class="track"><div class="fill" id="f-size"></div></div></div>
         <div class="gbar g-lift"><div class="lbl">lift <b id="v-vertical">0.00</b></div><div class="track"><div class="fill" id="f-vertical"></div></div></div>
         <div class="gbar g-swirl"><div class="lbl">swirl <b id="v-rotation">0.00</b></div><div class="track"><div class="fill" id="f-rotation"></div></div></div>
-
-        <div id="target">
-          <div class="who" id="targetwho">everyone</div>
-          <div class="hint" id="targethint">Tap a phone in the room to conduct just that instrument.</div>
-          <div id="tctl" hidden>
-            <label>vol <input id="vol" type="range" min="0" max="100" value="100"></label>
-            <button class="sbtn" id="mute">Mute</button>
-            <button class="sbtn" id="unaim">✕ all</button>
-          </div>
-        </div>
-
-        <div id="tip">
-          <img src="../assets/pixel/wizard.png" alt="">
-          <div class="tx"><b>✦ Tip</b>Pinch to grab, then wave — slow swipes up build energy,
-            a quick flick gets an echo.</div>
-        </div>
 
         <div id="status">
           <div class="cell"><div class="k">sync</div><div class="v" id="spread">—</div></div>

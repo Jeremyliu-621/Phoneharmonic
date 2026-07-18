@@ -11,11 +11,18 @@ export const WAND_POSE = "wand.pose";   // CV (webcam) wand: [tw, x, y, z, roll_
 export const WAND_GRAB = "wand.grab";
 export const WAND_FEEDBACK = "wand.feedback";
 export const WAND_RECAL = "wand.recal";
+export const WAND_TOUCH = "wand.touch";   // {pad, state} MPR121 pads (hw wand)
+export const WAND_RANGE = "wand.range";   // {mm} ToF distance (hw wand)
+export const WAND_MODE = "wand.mode";     // {mode: "ai"|"det"}
+export const WAND_GESTURE = "wand.gesture"; // {label, strength?} on-wand TinyML
 export const STAGE_PLACE = "stage.place";
 export const STAGE_ASSIGN = "stage.assign";
+export const STAGE_RECORD = "stage.record";  // {sha256, bytes, dur_s}
 export const ADMIN_CMD = "admin.cmd";
 export const SONG_LOAD = "song.load";
 export const SONG_EDIT = "song.edit";   // editor-authored notes -> replaces/updates the song
+export const SONG_HUM = "song.hum";       // {frames: [[t_ms, midi_float, rms], ...]}
+export const SONG_FILE = "song.file";     // {name} load songs/<name>.mid server-side
 export const CLOCK_REPORT = "clock.report";
 
 // Server -> Client
@@ -27,6 +34,9 @@ export const SCHED_CANCEL = "sched.cancel";
 export const ROSTER = "roster";
 export const ENGINE_STATE = "engine.state";   // live accompaniment/gesture updates
 export const WAND_STATE = "wand.state";
+export const ANNOUNCE = "announce";       // {text, audio_b64?, mime?}
+export const FX_TENSION = "fx.tension";   // {value: 0..1}
+export const FX_EXPR = "fx.expr";         // {section, semis, gain}
 export const ERR = "err";
 
 export const SECTION_ALL = "all";

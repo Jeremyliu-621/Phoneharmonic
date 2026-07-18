@@ -117,7 +117,14 @@ joinScreen.addEventListener("click", async () => {
       }
     }
   });
-  conn.on(P.SCHED_CANCEL, (m) => { if (m.allnotesoff) synth.panic(); });
+  conn.on(P.SCHED_CANCEL, (m) => {   // global panic, or a targeted cut of MY notes (solo)
+    if (m.allnotesoff || m.section === myId) synth.panic();
+  });
+  conn.on(P.FX_TENSION, (m) => synth.setTension(m.value));
+  conn.on(P.FX_EXPR, (m) => {   // targeted phones warp; everyone else resets
+    if (m.section === P.SECTION_ALL || m.section === myId) synth.setExpression(m.semis, m.gain);
+    else synth.setExpression(0, 1);
+  });
   conn.on(P.SECTION_CONFIG, (m) => {         // live instrument reassignment from the editor
     synth.setInstrument(m.instrument);
     showInstrument(m.instrument);
@@ -130,6 +137,7 @@ joinScreen.addEventListener("click", async () => {
     showInstrument(welcome.config.instrument);
     el("sid").textContent = `${myId} · ${welcome.config.instrument}`;
     el("dot").classList.add("ok");
+    clock.checkEpoch(welcome.server_time);
     clock.start();
     conn.send({ t: P.SECTION_READY });
   });
