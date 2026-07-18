@@ -62,11 +62,7 @@ const seen = new Set();
 const secInstrument = new Map();     // section id -> instrument (roll colours)
 let lastChoice = null;
 let curSong = null;                  // engine song identity (clears the drop's busy state)
-let lastSong = null;                 // last engine song name (drop-zone reset trigger)
 let dragging = null;                 // {key, moved, lastSend} during a card drag
-
-// reset the MIDI drop zone once a freshly loaded song actually lands
-function onSongChanged() { if (typeof dropIdle === "function") dropIdle(); }
 
 // ── room coordinates: px ∈ [-1,1], py ∈ [0,1], hub at (0, 0.5) = map centre ──
 function roomBox() { const r = el("room").getBoundingClientRect(); return r; }
@@ -301,7 +297,6 @@ function applyEngine(eng) {
   const bpm = Math.round(eng.bpm);
   bpmNow = bpm;
   el("bpmlbl").textContent = bpm; el("bpmcell").textContent = bpm;
-  if (eng.song && eng.song !== lastSong) { lastSong = eng.song; onSongChanged(); }
   el("songname").textContent = eng.song || "—";
   if (eng.song !== curSong) { curSong = eng.song; dropIdle(); }   // new song landed
   el("barslbl").textContent = eng.bars ? eng.bars + " bars" : "";
