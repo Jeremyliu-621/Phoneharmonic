@@ -54,7 +54,10 @@ let pinchAnchorX = null;   // free-hand X captured when a pinch starts (scrub di
 // If the server is unreachable, sends queue then drop and the app still works.
 const conn = new Conn({ role: "admin", session: "lol1", name: "cv-gestures" });
 const emitter = new ServerEmitter(conn, { onEmit: (m) => logLine(`↗ <b>${m}</b>`) });
-conn.onOpen(() => setServerStatus(true));
+conn.onOpen(() => {
+  setServerStatus(true);
+  emitter.syncState();
+});
 conn.onClose(() => setServerStatus(false));
 conn.connect();
 
@@ -124,6 +127,10 @@ function onFrame(hands, dtMs) {
   }
   const event = stabilizer.update(label);
   if (event) handleEvent(event, control);
+
+  // Mirror the same debounced state used for actions to the server. ServerEmitter
+  // suppresses identical frames, so this produces one log per state transition.
+  emitter.state(stabilizer.active, currentMode, stabilizer.active ? score : 0);
 
   // Route to the MIDI editor: discrete edges + continuous pinch-scrub.
   // Un-mirror X (video/overlay are CSS-mirrored) so hand-right = playhead-right.
