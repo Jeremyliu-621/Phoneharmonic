@@ -195,6 +195,10 @@
       margin-top: .3rem; min-height: 1.3em; }
     #action .oct { display: block; font: 600 12px var(--px-body); text-transform: none; color: var(--blue); }
     #action .wandimg { width: 56px; height: auto; margin-top: .35rem; }
+    /* live stroke intent, straight from the wand's IMU (server-classified) */
+    #action #stroke { font: 700 10px var(--px-display); letter-spacing: .05em;
+      margin-top: .35rem; color: var(--ink-faint); min-height: 1.2em; }
+    #action #stroke.on { color: var(--green); }
 
     .gbar { margin: .5rem 0; }
     .gbar .lbl { display: flex; justify-content: space-between; align-items: baseline;
@@ -339,6 +343,7 @@
           <div class="did">Your hand did</div>
           <div class="what" id="what">—</div>
           <img class="wandimg" src="../assets/pixel/wand_wood.png" alt="">
+          <div id="stroke" title="live wand stroke">…</div>
         </div>
         <div class="gbar"><div class="lbl">energy <b id="v-energy">0.00</b></div><div class="track"><div class="fill" id="f-energy"></div></div></div>
         <div class="gbar g-size"><div class="lbl">size <b id="v-size">0.00</b></div><div class="track"><div class="fill" id="f-size"></div></div></div>

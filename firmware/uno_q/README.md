@@ -86,15 +86,33 @@ Set the laptop address before running: `WAND_LAPTOP_IP=192.168.137.1` (the app
 reads it in `wand/python/config.py`). Open `wand/` in App Lab and Run, or deploy
 headless with `arduino-app-cli`.
 
+## Zero-config connection
+
+Power the board → App Lab **Run** → done. The board finds the laptop by
+itself, in this order (see `python/wand_link.py resolve_ws_url`):
+
+1. `WAND_LAPTOP_IP` env, if set (manual override always wins).
+2. The last URL that worked (`~/.phoneharmonic_wand.json`) — instant reconnects.
+3. The server's **UDP discovery beacon** (port 41234): the laptop broadcasts
+   `{"phoneharmonic":1,"ws":"ws://…/ws"}` every 2s and answers `maestro?`
+   probes. Works on a phone-hosted hotspot where the laptop's IP changes.
+4. The default gateway — covers a laptop-hosted hotspot.
+
+If the wand can't connect, check the laptop server log for
+`discovery beacon on udp:41234` (set `WM_DISCOVERY_OFF=1` only on extra test
+servers, never the show server).
+
 ## Field calibration (no reflash)
 
-1. **Point the board at the laptop** and set `WAND_LAPTOP_IP` on the UNO Q to
-   the IP shown under the console's QR (the server prints it on startup).
+1. **Point the board at the laptop** — connection is automatic (above); the
+   IP under the console's QR is only needed for the manual override.
 2. **Verify the pointing axis** — run `python server/tools/wand_watch.py` on
    the laptop and sweep the wand slowly left → right. Yaw should climb
    positive.
    - Mirrored? restart the server with `WM_YAW_SIGN=-1`.
    - Barely moves? the board is mounted off-axis: try `WM_YAW_AXIS=4` or `5`.
+   - The live stroke readout (console right panel) uses the same yaw knobs
+     plus `WM_PITCH_AXIS`/`WM_PITCH_SIGN` (default gx) for RAISE/LOWER.
 3. **Squeeze to conduct** — covering the ToF sensor (< `WAND_GRAB_ON_MM`,
    default 100 mm) opens the gesture window; uncovering (> 150 mm) releases.
    Tension ramps as the hand approaches, peaking while grabbed.

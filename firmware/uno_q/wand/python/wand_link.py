@@ -13,6 +13,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import socket
+import struct
 import threading
 import time
 from collections import deque
@@ -24,6 +26,99 @@ import config
 from state import WandState
 
 log = logging.getLogger("wand.link")
+
+
+# ── zero-config server discovery ─────────────────────────────────────────────
+# Order: env override -> cached last-good URL -> listen/probe for the server's
+# UDP beacon -> default gateway (covers a laptop-hosted hotspot). The result:
+# App Lab "Run" is the only human action on the board, on any network.
+
+def _cached_url() -> str | None:
+    try:
+        with open(config.CACHE_FILE, encoding="utf-8") as f:
+            return json.load(f).get("ws") or None
+    except (OSError, ValueError):
+        return None
+
+
+def _save_cache(url: str) -> None:
+    try:
+        with open(config.CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump({"ws": url}, f)
+    except OSError:
+        pass
+
+
+def _discover_beacon(wait_s: float) -> str | None:
+    """Listen for the server's discovery beacon while poking it with probes.
+    Our own probe also lands in our socket (we bind the same port) — the
+    'phoneharmonic' key filters it out."""
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.bind(("", config.DISCOVERY_PORT))
+        sock.settimeout(1.0)
+    except OSError as e:
+        log.warning("discovery socket failed: %s", e)
+        return None
+    try:
+        deadline = time.monotonic() + wait_s
+        last_probe = 0.0
+        while time.monotonic() < deadline:
+            if time.monotonic() - last_probe > 2.0:
+                last_probe = time.monotonic()
+                for dst in ("255.255.255.255", "<broadcast>"):
+                    try:
+                        sock.sendto(b"maestro?", (dst, config.DISCOVERY_PORT))
+                    except OSError:
+                        pass
+            try:
+                data, _addr = sock.recvfrom(512)
+            except socket.timeout:
+                continue
+            try:
+                msg = json.loads(data.decode("utf-8", "replace"))
+            except ValueError:
+                continue
+            if msg.get("phoneharmonic") and msg.get("ws"):
+                return str(msg["ws"])
+        return None
+    finally:
+        sock.close()
+
+
+def _gateway_url() -> str | None:
+    """On the board's Linux, the default gateway is the hotspot host — which
+    IS the laptop when the laptop hosts. Free fallback."""
+    try:
+        with open("/proc/net/route", encoding="utf-8") as f:
+            for line in f.readlines()[1:]:
+                parts = line.split()
+                if len(parts) >= 3 and parts[1] == "00000000":
+                    gw = socket.inet_ntoa(struct.pack("<L", int(parts[2], 16)))
+                    return f"ws://{gw}:{config.WS_PORT}/ws"
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def resolve_ws_url(skip_cache: bool = False) -> str | None:
+    if config.WS_URL:                       # WAND_LAPTOP_IP override always wins
+        return config.WS_URL
+    if not skip_cache:
+        url = _cached_url()
+        if url:
+            log.info("using cached server url %s", url)
+            return url
+    url = _discover_beacon(config.DISCOVERY_WAIT_S)
+    if url:
+        log.info("discovered server via beacon: %s", url)
+        return url
+    url = _gateway_url()
+    if url:
+        log.info("falling back to gateway: %s", url)
+    return url
 
 # Bridge (MCU<->Linux). Optional import so this module stays testable off-board.
 try:
@@ -87,20 +182,31 @@ class WandLink:
             Bridge.provide("imu", self._on_imu)
             Bridge.provide("range", self._on_range)
 
-    # --- main loop: reconnect forever ---
+    # --- main loop: discover + reconnect forever ---
     async def run(self) -> None:
         self._ws = None
+        from_cache = False
+        skip_cache = False
         while True:
+            url = await asyncio.to_thread(resolve_ws_url, skip_cache)
+            skip_cache = False
+            if url is None:
+                log.warning("no server found (beacon quiet, no gateway); retrying")
+                await asyncio.sleep(config.RECONNECT_BACKOFF_S)
+                continue
+            from_cache = (not config.WS_URL) and url == _cached_url()
             try:
-                async with connect(config.WS_URL) as ws:
+                async with connect(url) as ws:
                     self._ws = ws
                     self._grabbed = False   # a reconnect must not strand a grab
                     await self._handshake(ws)
-                    log.info("wand link up -> %s (client_id=%s)",
-                             config.WS_URL, self.state.client_id)
+                    _save_cache(url)        # it worked: instant reconnects next time
+                    log.info("wand link up -> %s (client_id=%s)", url, self.state.client_id)
                     await asyncio.gather(self._uplink(ws), self._downlink(ws))
             except (OSError, websockets.ConnectionClosed) as e:
                 log.warning("link down (%s); reconnecting", type(e).__name__)
+                if from_cache:
+                    skip_cache = True       # stale cache (new network?): rediscover
             except Exception:  # noqa: BLE001
                 log.exception("link error; reconnecting")
             finally:

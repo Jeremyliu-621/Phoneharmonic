@@ -44,6 +44,7 @@ from config import (
 )
 from engine.candidates import GENERATORS
 from engine.conductor import Conductor
+from gestures.strokes import StrokeTracker
 from hub import ClientConn, Hub, send_json
 from imu_telemetry import ImuTelemetry
 from network_address import address_score, format_url_host
@@ -99,6 +100,7 @@ class App:
         self.wand = WandRouter(self.engine, recorder=self.recorder)
         self.scheduler = Scheduler(self.engine, self.hub)
         self.aimer = WandAimer()
+        self.strokes = StrokeTracker()          # live stroke intent for the panel
         self.showlog = ShowLog(DEFAULT_SESSION)
         self.announcer = Announcer(self._announce_line)
         self.imu_telemetry = ImuTelemetry()
@@ -271,6 +273,7 @@ class App:
             else:
                 self.session.wand = WandSlot(connected=True, variant=variant)
                 self._wand_client = client_id
+                self.strokes.reset()             # fresh wand, fresh stroke window
                 self.imu_telemetry.reset()       # never mix diagnostics across wand owners
                 self._last_state_ms = 0.0
                 self.wand.reset()               # a fresh wand must not inherit a stale grab
@@ -742,6 +745,7 @@ class App:
     async def _update_aim(self, frames: list) -> None:
         self.aimer.on_frames(frames)
         aim = self.aimer.resolve(self._placements())
+        stroke, live, stroke_new = self.strokes.push(frames)   # live intent for the panel
         if self.session.wand.mode == "det":
             await self._expression(frames, aim)
         now = server_time_ms()
@@ -751,11 +755,12 @@ class App:
             if aim:
                 self.showlog.record("wand.aim", section=aim)
             await self._notify_wand()            # selected-phone change reaches the board
-        elif now - self._last_state_ms < 150.0:
-            return
+        elif not stroke_new and now - self._last_state_ms < 150.0:
+            return                               # a fresh stroke bypasses the throttle
         self._last_state_ms = now
         await self.hub.broadcast({"t": P.WAND_STATE, "grabbed": self.wand.grabbing,
                                   "aim_section": aim, "yaw_deg": round(self.aimer.yaw, 1),
+                                  "stroke": stroke, "live": live,
                                   "imu": self.imu_telemetry.snapshot()},
                                  roles=("stage", "admin"))
 
@@ -942,6 +947,11 @@ async def main() -> None:
     log.info("stage/admin:  http://%s:%d/stage/?admin=1", url_host, HTTP_PORT)
     log.info("section join: http://%s:%d/section/?s=%s", url_host, HTTP_PORT, DEFAULT_SESSION)
     asyncio.create_task(app.prune_loop())
+    if not os.environ.get("WM_DISCOVERY_OFF"):
+        # announce ourselves so the UNO Q wand finds this laptop by itself
+        from config import DISCOVERY_PORT
+        from discovery import start_beacon
+        await start_beacon(f"ws://{url_host}:{HTTP_PORT}/ws", DISCOVERY_PORT)
 
     # host=None binds all interfaces (IPv4 + IPv6), so both localhost (::1 on
     # Windows) and LAN addresses from either family reach the server.

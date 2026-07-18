@@ -86,8 +86,75 @@ async def main(seconds: float) -> None:
         print("demo done")
 
 
+async def strokes_mode(loops: int) -> None:
+    """Perform the whole stroke vocabulary, announced, so the console panel can
+    be watched end-to-end with zero hardware (and the e2e test can assert)."""
+    import math as _m
+
+    def gyro(name, gx=0.0, gz=0.0, dur=0.45):
+        return (name, lambda t: (0.0, 0.0, 9.81, gx, 0.0, gz), dur)
+
+    def circle(t):
+        w = 2 * _m.pi / 0.6
+        return (0.0, 0.0, 9.81, 260.0 * _m.sin(w * t), 0.0, 260.0 * _m.cos(w * t))
+
+    def stab(t):
+        return (14.0 if 0.10 <= t < 0.18 else 0.0, 0.0, 9.81, 0.0, 0.0, 0.0)
+
+    def shake(t):
+        return (9.0 * _m.sin(2 * _m.pi * 7 * t), 0.0, 9.81, 0.0, 0.0, 0.0)
+
+    SCRIPT = [
+        gyro("RIGHT_SWIPE", gz=120.0),
+        gyro("LEFT_SWIPE", gz=-120.0),
+        gyro("RAISE", gx=100.0),
+        gyro("LOWER", gx=-100.0),
+        ("CIRCLE", circle, 1.2),
+        ("STAB", stab, 0.4),
+        ("SHAKE", shake, 0.7),
+    ]
+
+    async with websockets.connect(WS) as ws:
+        await ws.send(json.dumps({"t": "hello", "v": 1, "role": "wand", "session": "lol1"}))
+        await ws.recv()
+        print(f"fake wand (stroke mode) -> {WS}")
+
+        async def drain() -> None:
+            async for _ in ws:
+                pass
+        drain_task = asyncio.create_task(drain())
+
+        seq, tw = 0, 1000.0
+        for loop_i in range(loops):
+            for (name, fn, dur) in SCRIPT:
+                print(f"  performing {name}")
+                t, frames = 0.0, []
+                while t < dur:
+                    ax, ay, az, gx, gy, gz = fn(t)
+                    frames.append([round(tw), ax, ay, az, gx, gy, gz])
+                    if len(frames) >= BATCH:
+                        seq += 1
+                        await ws.send(json.dumps({"t": "wand.imu", "seq": seq, "frames": frames}))
+                        frames = []
+                        await asyncio.sleep(BATCH / RATE_HZ)
+                    t += 1.0 / RATE_HZ
+                    tw += 1000.0 / RATE_HZ
+                # settle: stillness between strokes (lets the latch expire)
+                for _ in range(int(1.6 * RATE_HZ / BATCH)):
+                    seq += 1
+                    batch = [[round(tw + i * 20), 0.0, 0.0, 9.81, 0.0, 0.0, 0.0] for i in range(BATCH)]
+                    tw += BATCH * 20
+                    await ws.send(json.dumps({"t": "wand.imu", "seq": seq, "frames": batch}))
+                    await asyncio.sleep(BATCH / RATE_HZ)
+        drain_task.cancel()
+        print("stroke demo done")
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--seconds", type=float, default=60.0)
+    ap.add_argument("--strokes", action="store_true",
+                    help="perform the stroke vocabulary instead of sweeping")
+    ap.add_argument("--loops", type=int, default=3)
     args = ap.parse_args()
-    asyncio.run(main(args.seconds))
+    asyncio.run(strokes_mode(args.loops) if args.strokes else main(args.seconds))

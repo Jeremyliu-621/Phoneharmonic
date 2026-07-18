@@ -7,13 +7,21 @@ from __future__ import annotations
 
 import os
 
-# LAN IP of the laptop running server/main.py — the address the phones use.
-# The server prints it on startup (detect_lan_ip); override via env for the venue.
-LAPTOP_IP = os.environ.get("WAND_LAPTOP_IP", "192.168.1.100")
+# The laptop's address is normally DISCOVERED (the server broadcasts a UDP
+# beacon — see wand_link.resolve_ws_url), so nothing needs typing on the
+# board. WAND_LAPTOP_IP remains as a manual override that always wins.
+LAPTOP_IP = os.environ.get("WAND_LAPTOP_IP")          # None = auto-discover
 WS_PORT = int(os.environ.get("WAND_WS_PORT", "8080"))
 SESSION = os.environ.get("WAND_SESSION", "lol1")
 
-WS_URL = f"ws://{LAPTOP_IP}:{WS_PORT}/ws"
+WS_URL = f"ws://{LAPTOP_IP}:{WS_PORT}/ws" if LAPTOP_IP else None
+
+# Discovery: listen for the server's beacon / probe it on this UDP port
+# (must match the server's WM_DISCOVERY_PORT), and remember the last URL
+# that worked so reconnects are instant.
+DISCOVERY_PORT = int(os.environ.get("WAND_DISCOVERY_PORT", "41234"))
+DISCOVERY_WAIT_S = float(os.environ.get("WAND_DISCOVERY_WAIT_S", "6"))
+CACHE_FILE = os.path.expanduser(os.environ.get("WAND_CACHE_FILE", "~/.phoneharmonic_wand.json"))
 
 PROTOCOL_VERSION = 1
 BATCH = 5                       # IMU frames per wand.imu message (~10-12 Hz)

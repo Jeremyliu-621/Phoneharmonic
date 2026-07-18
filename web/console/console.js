@@ -432,6 +432,11 @@ function ingest(e) {
 
 // bar position ticker (from the engine transport, on the synced clock)
 setInterval(() => {
+  // wand gone quiet -> the stroke line goes quiet too (same rule as the beam)
+  if (wandSeen && performance.now() - wandSeen > 1500 && el("stroke").textContent !== "…") {
+    el("stroke").textContent = "…";
+    el("stroke").classList.remove("on");
+  }
   if (!transport || !transport.playing || !clock || clock.theta === null) { el("barpos").textContent = "–"; return; }
   const t = clock.serverNow() - transport.anchor;
   if (t < 0 || !transport.bar_ms || !transport.n_bars) { el("barpos").textContent = "–"; return; }
@@ -462,13 +467,27 @@ conn.on(P.SCHED_NOTES, (m) => {
   }
 });
 conn.on(P.SCHED_CANCEL, (m) => { if (m.allnotesoff) synth.panic(); });
-// hardware-wand pointing: draw the live beam over the room (~7 Hz)
+// hardware-wand streaming (~7 Hz): pointing beam + live meters + stroke intent
+const STROKE_LABELS = {
+  LEFT_SWIPE: "← LEFT SWIPE", RIGHT_SWIPE: "→ RIGHT SWIPE",
+  RAISE: "↑ RAISE", LOWER: "↓ LOWER", CIRCLE: "⟳ CIRCLE",
+  STAB: "➤ STAB", SHAKE: "≋ SHAKE",
+};
 conn.on(P.WAND_STATE, (m) => {
   if (m.yaw_deg === undefined) return;
   wandYaw = m.yaw_deg;
   wandGrabbed = !!m.grabbed;
   wandSeen = performance.now();
   drawLinks();
+  if (m.live) {                       // the panel breathes with the wand, live
+    el("v-energy").textContent = (m.live.energy ?? 0).toFixed(2); bar("energy", m.live.energy ?? 0, 1);
+    el("v-size").textContent = (m.live.size ?? 0).toFixed(2); bar("size", m.live.size ?? 0, 1);
+    el("v-vertical").textContent = (m.live.lift ?? 0).toFixed(2); bar("vertical", Math.abs(m.live.lift ?? 0), 1);
+    el("v-rotation").textContent = (m.live.swirl ?? 0).toFixed(2); bar("rotation", m.live.swirl ?? 0, 1);
+  }
+  const lbl = STROKE_LABELS[m.stroke];
+  el("stroke").textContent = lbl || "…";
+  el("stroke").classList.toggle("on", !!lbl);
 });
 
 conn.onOpen((welcome) => {
