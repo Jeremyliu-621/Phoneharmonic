@@ -161,6 +161,15 @@ export class Synth {
       body.connect(bg).connect(this.master);
       body.start(t); body.stop(t + 0.12);
       this.scheduled.push(noise, body);
+    } else if (midi >= 49) {                // crash: long bright wash (the sting)
+      const noise = this._noise();
+      const hp = this.ctx.createBiquadFilter();
+      hp.type = "highpass"; hp.frequency.value = 4500;
+      g.gain.setValueAtTime(vel * 0.6, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.9);
+      noise.connect(hp).connect(g);
+      noise.start(t); noise.stop(t + 0.95);
+      this.scheduled.push(noise);
     } else {                                // hats / other percussion: bright tick
       const noise = this._noise();
       const hp = this.ctx.createBiquadFilter();

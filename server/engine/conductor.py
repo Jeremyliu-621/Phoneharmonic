@@ -122,18 +122,25 @@ class Conductor:
         pass  # grab edges could cut sustains; not needed for the slice
 
     def _queue_pickup(self, t_end_ms: float) -> None:
-        """The room answers a gesture on the next 8th-note — a quick low-velocity
-        chord flourish — so conducting feels instant while the full musical
-        response still lands at the bar line."""
+        """The room answers a gesture right away, on the next 8th-note. A sharp
+        DRAMATIC motion (fast + short = a stab) gets a fortissimo two-octave
+        chord sting with a crash; anything gentler gets a quick low-velocity
+        flourish. The full musical response still lands at the bar line."""
         if not self._playing:
             return
         eighth = self.bar_ms / 8
         bar_start = self._next_bar_start - self.bar_ms
-        k = math.ceil((t_end_ms + 60.0 - bar_start) / eighth)
+        at = bar_start + math.ceil((t_end_ms + 60.0 - bar_start) / eighth) * eighth
         chord = self.song.bar(max(0, self._next_bar_idx - 1)).chord_pcs
-        vel = round(0.25 + 0.5 * (self._gesture.energy if self._gesture else 0.3), 3)
-        self._pickup = [(bar_start + k * eighth + i * eighth / 4, eighth / 4, m, vel)
-                        for i, m in enumerate(voice_triad(chord, base=64))]
+        g = self._gesture
+        if g is not None and g.energy > 0.65 and 0.0 < g.duration < 0.6:   # the sting
+            stab = voice_triad(chord, base=52) + voice_triad(chord, base=64)
+            self._pickup = [(at, eighth, m, 0.95, "pluck") for m in stab]
+            self._pickup.append((at, eighth, 49, 0.9, "drum"))             # crash
+        else:                                                              # the flourish
+            vel = round(0.25 + 0.5 * (g.energy if g else 0.3), 3)
+            self._pickup = [(at + i * eighth / 4, eighth / 4, m, vel, "pluck")
+                            for i, m in enumerate(voice_triad(chord, base=64))]
 
     def on_aim(self, section_id: str | None) -> None:
         self._aim = section_id
@@ -153,9 +160,9 @@ class Conductor:
             self._reanchor = False
         events: list[NoteEvent] = []
         if self._pickup:                         # instant gesture answer, once
-            for (at, dur, midi, vel) in self._pickup:
+            for (at, dur, midi, vel, art) in self._pickup:
                 if at >= now_ms + MIN_LEAD_MS:
-                    events.append(self._note(SECTION_ALL, at, dur, midi, vel, "pluck"))
+                    events.append(self._note(SECTION_ALL, at, dur, midi, vel, art))
             self._pickup = None
         while self._next_bar_start <= until_ms:
             if self._next_bar_start >= now_ms - self.bar_ms:

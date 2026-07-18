@@ -94,7 +94,7 @@ def main() -> int:
     calm_drums = sum(1 for e in calm if e.art == "drum")
     busy_drums = sum(1 for e in busy if e.art == "drum")
     assert len(busy) > len(calm), f"energy should open the arrangement: {len(busy)} vs {len(calm)}"
-    assert 1 <= calm_drums < busy_drums == 8, f"drums should thin when calm ({calm_drums} vs {busy_drums})"
+    assert 1 <= calm_drums < busy_drums, f"drums should thin when calm ({calm_drums} vs {busy_drums})"
     print(f"    busy bar {len(busy)} events ({busy_drums} drum hits) > calm bar {len(calm)} ({calm_drums} hits)")
 
     print("\nALL MIDI CHECKS PASSED ✓")
