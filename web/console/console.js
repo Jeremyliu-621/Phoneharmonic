@@ -371,31 +371,39 @@ function drawLane(canvas, track, bars, col) {
 // ── bottom roll ──────────────────────────────────────────────────────────────
 const WINDOW_MS = 4200, FUTURE_MS = 1500, RLO = 36, RHI = 96;
 function drawRoll() {
-  const canvas = el("rollcanvas");
-  const dpr = window.devicePixelRatio || 1;
-  const W = (canvas.width = canvas.clientWidth * dpr);
-  const H = (canvas.height = canvas.clientHeight * dpr);
-  const ctx = canvas.getContext("2d");
-  ctx.clearRect(0, 0, W, H);
-  const now = clock && clock.theta !== null ? clock.serverNow() : null;
-  if (now === null) { requestAnimationFrame(drawRoll); return; }
-  const pxPerMs = W / WINDOW_MS;
-  const headX = W - FUTURE_MS * pxPerMs;
-  ctx.strokeStyle = "rgba(54,38,25,.5)"; ctx.lineWidth = 1.5 * dpr;
-  ctx.beginPath(); ctx.moveTo(headX, 0); ctx.lineTo(headX, H); ctx.stroke();
-  for (let i = notes.length - 1; i >= 0; i--) {
-    const n = notes[i];
-    const x = W - (now + FUTURE_MS - n.at) * pxPerMs;
-    const w = Math.max(3 * dpr, n.dur * pxPerMs);
-    if (x + w < 0) { notes.splice(i, 1); continue; }
-    if (x > W) continue;
-    const y = H - ((Math.max(RLO, Math.min(RHI, n.pitch)) - RLO) / (RHI - RLO)) * (H - 8 * dpr) - 4 * dpr;
-    ctx.globalAlpha = n.at <= now ? 0.95 : 0.4;
-    ctx.fillStyle = n.color;
-    ctx.fillRect(x, y - 3 * dpr, w, 6 * dpr);
+  // try/finally: one bad frame must never kill the animation loop for good —
+  // a dead rAF chain looks exactly like "the roll stopped working".
+  try {
+    const canvas = el("rollcanvas");
+    const dpr = window.devicePixelRatio || 1;
+    const W = (canvas.width = canvas.clientWidth * dpr);
+    const H = (canvas.height = canvas.clientHeight * dpr);
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, W, H);
+    const now = clock && clock.theta !== null ? clock.serverNow() : null;
+    if (now === null) return;
+    const pxPerMs = W / WINDOW_MS;
+    const headX = W - FUTURE_MS * pxPerMs;
+    ctx.strokeStyle = "rgba(54,38,25,.5)"; ctx.lineWidth = 1.5 * dpr;
+    ctx.beginPath(); ctx.moveTo(headX, 0); ctx.lineTo(headX, H); ctx.stroke();
+    for (let i = notes.length - 1; i >= 0; i--) {
+      const n = notes[i];
+      const x = W - (now + FUTURE_MS - n.at) * pxPerMs;
+      const w = Math.max(3 * dpr, n.dur * pxPerMs);
+      if (x + w < 0) { notes.splice(i, 1); continue; }
+      if (x > W) {          // not visible yet — but a note stamped in a dead
+        if (n.at - now > 60_000) notes.splice(i, 1);   // timebase never will be
+        continue;
+      }
+      const y = H - ((Math.max(RLO, Math.min(RHI, n.pitch)) - RLO) / (RHI - RLO)) * (H - 8 * dpr) - 4 * dpr;
+      ctx.globalAlpha = n.at <= now ? 0.95 : 0.4;
+      ctx.fillStyle = n.color;
+      ctx.fillRect(x, y - 3 * dpr, w, 6 * dpr);
+    }
+    ctx.globalAlpha = 1;
+  } finally {
+    requestAnimationFrame(drawRoll);
   }
-  ctx.globalAlpha = 1;
-  requestAnimationFrame(drawRoll);
 }
 function ingest(e) {
   if (seen.has(e.id)) return;
