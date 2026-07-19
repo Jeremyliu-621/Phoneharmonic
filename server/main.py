@@ -44,7 +44,7 @@ from config import (
 )
 from engine.candidates import GENERATORS
 from engine.conductor import Conductor
-from gestures.strokes import StrokeTracker
+from gestures.strokes import LIFT_SIGN, StrokeTracker
 from hub import ClientConn, Hub, send_json
 from imu_telemetry import ImuTelemetry
 from network_address import address_score, format_url_host
@@ -569,6 +569,16 @@ class App:
         if t == P.WAND_RECAL:
             self.aimer.recal()
             self.strokes.recal()                # beam and pose zones share one "forward"
+            # Recal = back to DEFAULT: current pose is neutral AND the music
+            # returns to the song as written — envelope, arcs, section edits,
+            # and any lingering expression warp all clear.
+            self.engine.reset_conducting()
+            self._tension = 0.0
+            await self.hub.broadcast({"t": P.FX_EXPR, "section": P.SECTION_ALL,
+                                      "semis": 0, "gain": 1.0}, roles=("section", "stage"))
+            await self.hub.broadcast({"t": P.FX_TENSION, "section": P.SECTION_ALL,
+                                      "value": 0.0}, roles=("section", "stage"))
+            self.showlog.record("wand.recal")
             return
         if t == P.STAGE_ASSIGN:
             await self._assign_instrument(msg.get("section_id"), msg.get("instrument"))
@@ -765,7 +775,8 @@ class App:
         if not row or len(row) < 3:
             return
         try:
-            tilt = max(-1.0, min(1.0, float(row[2]) / 9.8))   # ay = the lift axis
+            tilt = max(-1.0, min(1.0, LIFT_SIGN * float(row[2]) / 9.8))   # ay = the lift
+                                                             # axis; WM_LIFT_SIGN flips it
         except (TypeError, ValueError):
             return
         now = server_time_ms()
@@ -853,6 +864,15 @@ class App:
 
     async def _wand_range(self, mm: float) -> None:
         if mm < 0:
+            return
+        # Proximity->tension is a DET-mode instrument only. In AI mode the ToF
+        # is the squeeze-grab sensor — without this gate, a hand (or table)
+        # within 600mm washed the filter mid-performance in any mode.
+        if self.session.wand.mode != "det":
+            if self._tension > 0.0:
+                self._tension = 0.0
+                await self.hub.broadcast({"t": P.FX_TENSION, "section": P.SECTION_ALL,
+                                          "value": 0.0}, roles=("section", "stage"))
             return
         # 600mm+ away = open; closing to 100mm sweeps the tension to full.
         tension = max(0.0, min(1.0, (600.0 - mm) / 500.0))

@@ -44,6 +44,8 @@ STAB_TRAVEL = 20.0    # a stab goes nowhere: net yaw+pitch travel must stay tiny
 PITCH_ZONE_DEG = 30.0  # raise/lower the tip this far from neutral
 ROLL_DEG = 55.0        # wrist roll (about the wand's long axis) from neutral
 ROLL_SIGN = float(os.environ.get("WM_ROLL_SIGN", "1"))   # -1 if rolls read mirrored
+LIFT_SIGN = float(os.environ.get("WM_LIFT_SIGN", "1"))   # -1 if raise/lower read swapped
+                                                         # (board mounted tip-forward vs tip-back)
 YAW_ZONE_DEG = 35.0    # pointed left/right of neutral (integrated yaw)
 BASELINE_CALM_MS = 350.0  # first hold this calm = the auto-captured neutral
 TILT_HOLD_MS = 600.0   # zone held that long (calmly) -> commits
@@ -90,7 +92,7 @@ class StrokeTracker:
     def _angles(self) -> tuple[float, float]:
         """(pitch, roll) of the wand in degrees, from the gravity EMA."""
         g = self._g or [0.0, 0.0, 9.8]
-        pitch = math.degrees(math.asin(max(-1.0, min(1.0, g[1] / 9.8))))
+        pitch = math.degrees(math.asin(max(-1.0, min(1.0, LIFT_SIGN * g[1] / 9.8))))
         roll = math.degrees(math.atan2(g[0], g[2])) * ROLL_SIGN
         return pitch, roll
 
