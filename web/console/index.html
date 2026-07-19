@@ -140,6 +140,8 @@
     #campop:hover { opacity: 1; }
 
     /* instrument cards: little pixel handsets (doubled phones share a card) */
+    .card.solo .box { outline: 3px solid var(--blue); }
+    .card.dimmed { opacity: .35; filter: grayscale(.8); }
     .card { position: absolute; transform: translate(-50%, -50%); z-index: 6; width: 100px;
       cursor: grab; user-select: none; touch-action: none; text-align: center; }
     .card:active { cursor: grabbing; }
@@ -341,6 +343,8 @@
         <div class="mv"><span class="ic">🪄</span><div><b>Wand poles</b> (hold ~1s, near-90°)<i>up = harmony ·
           down = hush · left = runs · right = arpeggios</i></div></div>
         <div class="mv"><span class="ic">🎯</span><div><b>Tap a phone card</b><i>conduct just that instrument</i></div></div>
+        <div class="mv"><span class="ic">🔇</span><div><b>Double-tap a card</b><i>SOLO it — everyone else mutes ·
+          double-tap again to release</i></div></div>
       </details>
     </div>
 

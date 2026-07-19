@@ -96,6 +96,32 @@ def load_midi_bytes(data: bytes, name: str = "uploaded") -> tuple[Song, list[dic
     if not parts or all(not p["notes"] for p in parts.values()):
         raise ValueError("no notes found in MIDI")
 
+    # Single-part files (solo-piano transcriptions like Zora) get REGISTER-SPLIT
+    # so a room of phones has parts to share: each bar's notes above its median
+    # pitch become the treble/melody voice, the rest the accompaniment. Skipped
+    # when the low voice would be trivial (a truly monophonic line stays whole).
+    nondrum = [ch for ch, p in parts.items() if ch != 9 and p["notes"]]
+    if len(nondrum) == 1:
+        ch = nondrum[0]
+        by_bar: dict[int, list] = defaultdict(list)
+        for n in parts[ch]["notes"]:
+            by_bar[n[0] // bar_ticks].append(n)
+        hi, lo = [], []
+        for ns in by_bar.values():
+            med = sorted(x[2] for x in ns)[len(ns) // 2]
+            for n in ns:
+                (hi if n[2] >= med else lo).append(n)
+        if len(lo) >= 8 and len(hi) >= 8:
+            ch2 = max(parts) + 1
+            ch2 += ch2 == 9
+            base = parts[ch]["name"] or "part"
+            parts[ch]["notes"] = hi
+            parts[ch]["name"] = f"{base} (treble)"
+            # The low voice gets its own INSTRUMENT (cello), not just its own
+            # part: the router doubles same-instrument parts onto every phone
+            # dealt that instrument, which would put both halves everywhere.
+            parts[ch2] = {"program": 42, "name": f"{base} (bass)", "notes": lo}
+
     # Part metadata + melody selection (non-drum, highest mean pitch, enough notes).
     part_info: list[dict] = []
     melody_ch, melody_score = None, -1.0

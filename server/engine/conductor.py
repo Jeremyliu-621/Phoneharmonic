@@ -682,13 +682,15 @@ class Conductor:
         # once per state GROUP (the shared feed's non-overridden sections
         # together, plus each individually-aimed section on its own) so a
         # push aimed at one phone doesn't paint an ornament onto every phone.
-        shared_secs = [s.section_id for s in self._sections if s.section_id not in self._sec_state]
+        audible = lambda s: not s.muted and s.volume > 0.001  # noqa: E731 - solo mutes
+        shared_secs = [s.section_id for s in self._sections
+                       if s.section_id not in self._sec_state and audible(s)]
         dest_all = [SECTION_ALL] if n == 0 else shared_secs
         groups: list[tuple[_ConductState, dict, list[str]]] = []
         if dest_all:
             groups.append((self._global, global_calc, dest_all))
         for sid, st in self._sec_state.items():
-            if sid in by_id:
+            if sid in by_id and audible(by_id[sid]):
                 groups.append((st, calc_by_state[id(st)], [sid]))
 
         device_by_state: dict[int, str | None] = {}
