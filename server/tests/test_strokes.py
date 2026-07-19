@@ -147,8 +147,6 @@ def test_still_and_noise_never_commit():
 
 
 def test_meters_move():
-    tr = StrokeTracker()
-    _, (stroke, meters, _c) = run(tr, frames(gyro_pulse(6, 200.0, 0.4)))[1], tr.push([])
     # feed an energetic burst and check the meters respond
     tr2 = StrokeTracker()
     _, last = run(tr2, frames(gyro_pulse(6, 200.0, 0.4)))
