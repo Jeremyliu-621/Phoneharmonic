@@ -4,6 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 REMOTE_APP="/home/arduino/ArduinoApps/phoneharmonic-stream-probe"
+REMOTE_RELAY_PID="$REMOTE_APP/.tcp-relay.pid"
+RELAY_PORT="18080"
 
 BOARD=""
 SERVER_IP=""
@@ -143,6 +145,7 @@ fi
 MONITOR="$REPO_ROOT/server/tools/wand_monitor.py"
 STREAMER="$SCRIPT_DIR/python/main.py"
 BOARD_REQUIREMENTS="$SCRIPT_DIR/python/requirements.txt"
+BOARD_RELAY="$SCRIPT_DIR/board_tcp_relay.py"
 SKETCH="$SCRIPT_DIR/sketch/sketch.ino"
 SKETCH_PROFILE="$SCRIPT_DIR/sketch/sketch.yaml"
 
@@ -153,6 +156,7 @@ else
   URL_HOST="$SERVER_IP"
 fi
 WS_URL="ws://$URL_HOST:$SERVER_PORT/ws"
+BOARD_WS_URL="$WS_URL"
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
   echo "[dry-run] board:      $BOARD"
@@ -167,7 +171,7 @@ fi
 echo "[probe] running local preflight checks"
 for required_file in \
   "$SCRIPT_DIR/app.yaml" "$SCRIPT_DIR/README.md" \
-  "$STREAMER" "$BOARD_REQUIREMENTS" "$SKETCH" "$SKETCH_PROFILE" \
+  "$STREAMER" "$BOARD_REQUIREMENTS" "$BOARD_RELAY" "$SKETCH" "$SKETCH_PROFILE" \
   "$MONITOR" "$REPO_ROOT/server/network_address.py" "$REPO_ROOT/server/main.py"; do
   if [[ ! -s "$required_file" ]]; then
     echo "required probe file is missing or empty: $required_file" >&2
@@ -177,7 +181,8 @@ done
 
 bash -n "$0"
 "$PYTHON_BIN" -m py_compile \
-  "$STREAMER" "$MONITOR" "$REPO_ROOT/server/network_address.py" "$REPO_ROOT/server/main.py"
+  "$STREAMER" "$BOARD_RELAY" "$MONITOR" \
+  "$REPO_ROOT/server/network_address.py" "$REPO_ROOT/server/main.py"
 "$PYTHON_BIN" -c \
   'import mido, serial, websockets; from websockets.asyncio.client import connect' || {
   echo "local Python is missing compatible server dependencies; install server/requirements.txt" >&2
@@ -233,6 +238,12 @@ STAGE_DIR=""
 SERVER_PID=""
 BOARD_STARTED=0
 PROBE_PASSED=0
+SSH_SOCKET=""
+RELAY_STARTED=0
+
+board_ssh() {
+  ssh -o ControlMaster=auto -o ControlPersist=600 -o ControlPath="$SSH_SOCKET" "$BOARD" "$@"
+}
 
 cleanup() {
   exit_status=$?
@@ -245,7 +256,16 @@ cleanup() {
 
   if [[ "$BOARD_STARTED" -eq 1 && ("$KEEP_RUNNING" -ne 1 || "$PROBE_PASSED" -ne 1) ]]; then
     echo "[probe] stopping isolated board app"
-    ssh "$BOARD" "arduino-app-cli app stop '$REMOTE_APP'" >/dev/null 2>&1 || true
+    board_ssh "arduino-app-cli app stop '$REMOTE_APP'" >/dev/null 2>&1 || true
+  fi
+
+  if [[ "$RELAY_STARTED" -eq 1 && ("$KEEP_RUNNING" -ne 1 || "$PROBE_PASSED" -ne 1) ]]; then
+    board_ssh "if test -f '$REMOTE_RELAY_PID'; then kill \"\$(cat '$REMOTE_RELAY_PID')\" >/dev/null 2>&1 || true; rm -f '$REMOTE_RELAY_PID'; fi" \
+      >/dev/null 2>&1 || true
+  fi
+
+  if [[ -n "$SSH_SOCKET" && -S "$SSH_SOCKET" ]]; then
+    ssh -o ControlPath="$SSH_SOCKET" -O exit "$BOARD" >/dev/null 2>&1 || true
   fi
 
   if [[ -n "$STAGE_DIR" && -d "$STAGE_DIR" ]]; then
@@ -256,17 +276,37 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 echo "[probe] checking UNO Q access: $BOARD"
-ssh "$BOARD" "command -v arduino-app-cli >/dev/null"
+STAGE_DIR="$(mktemp -d /tmp/phoneharmonic-probe.XXXXXX)"
+SSH_SOCKET="$STAGE_DIR/ssh-control"
+board_ssh "command -v arduino-app-cli >/dev/null"
 
-STAGE_DIR="$(mktemp -d)"
+if [[ "$SERVER_IP" == *:* ]]; then
+  BOARD_IPV4="$(board_ssh \
+    "ip -o -4 addr show scope global | awk '\$2 !~ /^(docker|br-|veth)/ {split(\$4, a, \"/\"); print a[1]; exit}'")"
+  BOARD_IPV4="$(printf '%s' "$BOARD_IPV4" | tr -d '\r\n')"
+  if [[ -z "$BOARD_IPV4" ]]; then
+    echo "UNO Q has no non-Docker IPv4 address for the IPv6 container relay" >&2
+    exit 1
+  fi
+  BOARD_IPV4="$("$PYTHON_BIN" "$REPO_ROOT/server/network_address.py" "$BOARD_IPV4")"
+  if [[ "$BOARD_IPV4" == *:* ]]; then
+    echo "UNO Q relay address unexpectedly resolved as IPv6: $BOARD_IPV4" >&2
+    exit 1
+  fi
+  BOARD_WS_URL="ws://$BOARD_IPV4:$RELAY_PORT/ws"
+  echo "[probe] Arduino container has IPv4-only networking"
+  echo "[probe] board relay: $BOARD_WS_URL -> $WS_URL"
+fi
+
 STAGE_APP="$STAGE_DIR/phoneharmonic-stream-probe"
 mkdir -p "$STAGE_APP/python" "$STAGE_APP/sketch"
 cp "$SCRIPT_DIR/app.yaml" "$SCRIPT_DIR/README.md" "$STAGE_APP/"
+cp "$BOARD_RELAY" "$STAGE_APP/"
 cp "$SCRIPT_DIR/python/main.py" "$SCRIPT_DIR/python/requirements.txt" "$STAGE_APP/python/"
 cp "$SCRIPT_DIR/sketch/sketch.ino" "$SCRIPT_DIR/sketch/sketch.yaml" "$STAGE_APP/sketch/"
 
 "$PYTHON_BIN" - "$STAGE_APP/python/probe_config.json" \
-  "$WS_URL" "$SESSION" <<'PY'
+  "$BOARD_WS_URL" "$SESSION" <<'PY'
 import json
 import pathlib
 import sys
@@ -276,14 +316,23 @@ path.write_text(json.dumps({"ws_url": sys.argv[2], "session": sys.argv[3]}) + "\
 PY
 
 echo "[probe] deploying isolated app to $BOARD:$REMOTE_APP"
-ssh "$BOARD" "arduino-app-cli app stop '$REMOTE_APP' >/dev/null 2>&1 || true; mkdir -p '$REMOTE_APP/python' '$REMOTE_APP/sketch'"
-scp -q -r "$STAGE_APP/." "$BOARD:$REMOTE_APP/"
+board_ssh "arduino-app-cli app stop '$REMOTE_APP' >/dev/null 2>&1 || true; mkdir -p '$REMOTE_APP/python' '$REMOTE_APP/sketch'"
+scp -q -o ControlMaster=auto -o ControlPersist=600 -o ControlPath="$SSH_SOCKET" \
+  -r "$STAGE_APP/." "$BOARD:$REMOTE_APP/"
+
+if [[ "$BOARD_WS_URL" != "$WS_URL" ]]; then
+  board_ssh \
+    "if test -f '$REMOTE_RELAY_PID'; then kill \"\$(cat '$REMOTE_RELAY_PID')\" >/dev/null 2>&1 || true; fi; nohup python3 '$REMOTE_APP/board_tcp_relay.py' --listen-host '$BOARD_IPV4' --listen-port '$RELAY_PORT' --target-host '$SERVER_IP' --target-port '$SERVER_PORT' >'$REMOTE_APP/tcp-relay.log' 2>&1 </dev/null & echo \$! >'$REMOTE_RELAY_PID'"
+  RELAY_STARTED=1
+  sleep 0.5
+  board_ssh "kill -0 \"\$(cat '$REMOTE_RELAY_PID')\""
+fi
 
 echo "[probe] compiling, flashing, and starting the UNO Q app"
 # From this point cleanup may safely issue a stop even if compilation or startup
 # fails partway through—the target is exclusively this isolated probe App.
 BOARD_STARTED=1
-ssh "$BOARD" "arduino-app-cli app start '$REMOTE_APP'"
+board_ssh "arduino-app-cli app start '$REMOTE_APP'"
 
 set +e
 "$PYTHON_BIN" "$MONITOR" --check-server --ip "$SERVER_IP" --port "$SERVER_PORT" --session "$SESSION"
@@ -352,5 +401,11 @@ if [[ "$probe_status" -eq 0 ]]; then
   fi
 else
   echo "[probe] hardware stream FAIL" >&2
+  echo "[probe] recent board app logs:" >&2
+  board_ssh "arduino-app-cli app logs '$REMOTE_APP' --all 2>&1 | tail -n 80" >&2 || true
+  if [[ "$RELAY_STARTED" -eq 1 ]]; then
+    echo "[probe] board relay log:" >&2
+    board_ssh "tail -n 40 '$REMOTE_APP/tcp-relay.log'" >&2 || true
+  fi
 fi
 exit "$probe_status"

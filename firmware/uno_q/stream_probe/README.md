@@ -146,6 +146,12 @@ board App was stopped. If the server cannot accept the IPv6 connection, verify
 that the Mac firewall permits inbound TCP on the selected port (default 8080)
 and that the chosen address belongs to the hotspot interface.
 
+Arduino App containers use an IPv4-only Docker network on current UNO Q images.
+When `--server-ip` is IPv6, the launcher automatically starts a TCP relay on
+the UNO Q host and gives the container an IPv4 relay URL. The relay is stopped
+with the App after a failed/non-persistent run. With `--keep-running`, both stay
+active so the frontend can continue receiving motion.
+
 ## Troubleshooting
 
 | Symptom | Likely boundary |
@@ -163,6 +169,15 @@ Board-side logs are available after deployment with:
 ```bash
 ssh arduino@uno-q.local \
   "arduino-app-cli app logs /home/arduino/ArduinoApps/phoneharmonic-stream-probe --all"
+```
+
+To stop a successful `--keep-running` deployment and its IPv6 relay:
+
+```bash
+ssh arduino@uno-q.local \
+  "arduino-app-cli app stop /home/arduino/ArduinoApps/phoneharmonic-stream-probe; \
+   test ! -f /home/arduino/ArduinoApps/phoneharmonic-stream-probe/.tcp-relay.pid || \
+   kill \$(cat /home/arduino/ArduinoApps/phoneharmonic-stream-probe/.tcp-relay.pid)"
 ```
 
 ## Useful options
