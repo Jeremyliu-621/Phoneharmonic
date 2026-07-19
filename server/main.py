@@ -748,6 +748,12 @@ class App:
         stroke, live, stroke_new = self.strokes.push(frames)   # live intent for the panel
         if self.session.wand.mode == "det":
             await self._expression(frames, aim)
+        elif stroke_new and stroke and not self.wand.grabbing:
+            # The hardware wand streams continuously with no grab edges: a
+            # committed stroke IS the gesture. Grab-based inputs (demo page,
+            # wand-sim) keep their window path — grabbing suppresses this.
+            self.engine.on_stroke(stroke, live, server_time_ms())
+            self.showlog.record("wand.stroke", stroke=stroke)
         now = server_time_ms()
         if aim != self._last_aim:
             self._last_aim = aim

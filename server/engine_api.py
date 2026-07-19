@@ -89,6 +89,12 @@ class MusicEngine(Protocol):
 
     def on_gesture(self, window: GestureWindow) -> None: ...
 
+    def on_stroke(self, label: str, meters: dict, server_ms: float) -> None:
+        """A committed stroke from the continuous (grab-less) wand stream.
+        label is one of gestures/strokes.py STROKES; meters is the tracker's
+        live {energy,size,lift,swirl}."""
+        ...
+
     def on_grab(self, kind: str, server_ms: float) -> None:
         """kind in {"start","end"}. `end` may cause sustained notes to be cut."""
         ...
