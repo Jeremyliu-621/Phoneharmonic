@@ -10,6 +10,18 @@ REPO_DIR = SERVER_DIR.parent
 WEB_DIR = REPO_DIR / "web"
 CERT_DIR = REPO_DIR / "certs"
 
+# --- .env (repo root, gitignored) ---
+# Drop the team's keys in <repo>/.env as KEY=value lines and just run
+# `venv/bin/python server/main.py`. Real shell env always wins, so a
+# one-off `WM_X=y python ...` override still works. See .env.example.
+for _envfile in (REPO_DIR / ".env", REPO_DIR / ".env.local"):
+    if _envfile.exists():
+        for _line in _envfile.read_text(encoding="utf-8").splitlines():
+            _line = _line.strip()
+            if _line and not _line.startswith("#") and "=" in _line:
+                _k, _, _v = _line.partition("=")
+                os.environ.setdefault(_k.strip(), _v.strip().strip("'\""))
+
 # --- Network (override with WM_HTTP_PORT / WM_HTTPS_PORT, e.g. to run a second
 #     instance for testing without stopping the main one) ---
 HTTP_PORT = int(os.environ.get("WM_HTTP_PORT", "8080"))   # plain http/ws — sections, ESP32 wand
@@ -67,6 +79,9 @@ SESSION_FILE = pathlib.Path(os.environ.get("WM_SESSION_FILE", str(SERVER_DIR / "
 # Last loaded/edited song, restored on boot — a restart must never silently
 # revert the show to the built-in loop.
 SONG_CACHE = pathlib.Path(os.environ.get("WM_SONG_CACHE", str(SERVER_DIR / "data" / "last_song")))
+# What a FRESH boot (no cached song) plays: the demo's flagship piece, loaded
+# from songs/ so "start the show" never lands on the built-in synth loop.
+DEFAULT_SONG = os.environ.get("WM_DEFAULT_SONG", "zelda-fairy.mid")
 
 # UDP discovery beacon: the wand board finds this server with no typed
 # commands (see server/discovery.py). WM_DISCOVERY_OFF=1 disables.
