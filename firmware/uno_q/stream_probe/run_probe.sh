@@ -115,12 +115,22 @@ if [[ -z "$SESSION" || "$SESSION" == *$'\n'* ]]; then
   exit 2
 fi
 
-if [[ -x "$REPO_ROOT/.venv/bin/python" ]]; then
-  PYTHON_BIN="$REPO_ROOT/.venv/bin/python"
-elif command -v python3 >/dev/null 2>&1; then
+# Repo venv first (either layout: POSIX .venv/venv or Windows venv/Scripts),
+# then system python3. Windows' bare `python3` is often the Store stub, so the
+# venv checks matter there.
+PYTHON_BIN=""
+for candidate in "$REPO_ROOT/.venv/bin/python" "$REPO_ROOT/venv/bin/python" \
+                 "$REPO_ROOT/.venv/Scripts/python.exe" "$REPO_ROOT/venv/Scripts/python.exe"; do
+  if [[ -x "$candidate" ]]; then
+    PYTHON_BIN="$candidate"
+    break
+  fi
+done
+if [[ -z "$PYTHON_BIN" ]] && command -v python3 >/dev/null 2>&1; then
   PYTHON_BIN="$(command -v python3)"
-else
-  echo "python3 or $REPO_ROOT/.venv/bin/python is required" >&2
+fi
+if [[ -z "$PYTHON_BIN" ]]; then
+  echo "no python found: create the repo venv or install python3" >&2
   exit 1
 fi
 

@@ -11,6 +11,7 @@ import argparse
 import asyncio
 import json
 import math
+import pathlib
 import statistics
 import sys
 import threading
@@ -20,7 +21,11 @@ from dataclasses import dataclass
 import websockets
 from websockets.asyncio.client import connect
 
-from network_address import websocket_url
+# Runnable as `python server/tools/wand_monitor.py` (how run_probe.sh calls it):
+# our imports live one directory up, which isn't on sys.path in that mode.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+
+from network_address import websocket_url  # noqa: E402
 
 
 @dataclass(frozen=True)
