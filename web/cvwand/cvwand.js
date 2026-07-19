@@ -62,9 +62,19 @@ let playing = true;
 //   ☝ ONE_FINGER = SELECT (point at an instrument to target AI/DET edits at
 //                  it, nothing is muted; shake to target "all" instead)
 //   ✌ TWO_FINGERS = DETERMINISTIC mode    🤟 THREE_FINGERS = AI mode
-const STABLE_FRAMES = 6;            // discrete gestures debounce; conducting stays instant
+// Discrete-gesture reliability: classify off smoothed landmarks (raw ones are
+// too jittery for finger-count geometry) and debounce with asymmetric
+// confirm/release windows, so a single noisy frame can neither restart a hold
+// nor prematurely drop an already-active gesture. Conducting stays instant —
+// it reads raw landmarks below, untouched by any of this.
+const SMOOTH_ALPHA = 0.5;           // EMA weight for classification-only landmarks
+const CONFIRM_FRAMES = 3;           // consecutive frames a new gesture must hold to commit
+const RELEASE_FRAMES = 4;           // consecutive misses before an active gesture drops
+const COMMIT_COOLDOWN_MS = 250;     // minimum gap between two gesture commits
 let cvMode = "AI";                  // start ready to conduct
-let rawGesture = null, rawCount = 0, cvGesture = null;
+let cvGesture = null;
+let smoothLm = null;                // EMA-smoothed landmarks, classification only
+let candGesture = null, candCount = 0, missCount = 0, lastCommitMs = -Infinity;
 let roster = [];                    // connected sections, left->right (for SELECT aiming)
 let lastAimId = null, lastAimMs = 0;
 let shakeBuf = [];                  // {t, xm} recent SELECT-mode samples
@@ -172,7 +182,8 @@ function loop(now) {
   if (landmarks) processHand(landmarks, now);
   else {
     if (grabbed) endGrab(now);      // hand left frame while grabbing -> release
-    rawGesture = null; rawCount = 0;
+    smoothLm = null;                // don't ease in from a stale hand position on re-entry
+    candGesture = null; candCount = 0; missCount = 0;
     if (cvGesture !== null) { cvGesture = null; sendCvState(); }
   }
 
@@ -186,13 +197,14 @@ function processHand(lm, now) {
   const pinchRatio = dist(lm[THUMB_TIP], lm[INDEX_TIP]) / handW;
   const xm = 1 - tip.x;   // mirror x for a selfie-natural feel
 
-  // ── discrete gesture layer: debounced, drives modes/transport/cv.state ────
-  const g = classify(lm, pinchRatio);
-  if (g === rawGesture) rawCount++;
-  else { rawGesture = g; rawCount = 1; }
-  if (rawCount === STABLE_FRAMES && g !== cvGesture) commitGesture(g, xm);
+  // ── discrete gesture layer: smoothed + debounced, drives modes/transport/cv.state ──
+  const slm = smoothLandmarks(lm);
+  const sHandW = dist(slm[INDEX_MCP], slm[PINKY_MCP]) || 0.001;
+  const sPinchRatio = dist(slm[THUMB_TIP], slm[INDEX_TIP]) / sHandW;
+  const g = classify(slm, sPinchRatio);
+  updateGesture(g, xm, now);
 
-  // ── conducting pinch: INSTANT in AI mode (the feel stays exactly as-is) ───
+  // ── conducting pinch: INSTANT in AI mode, off raw landmarks (the feel stays exactly as-is) ─
   if (cvMode === "AI") {
     if (!grabbed && pinchRatio < GRAB_ON) startGrab(now);
     else if (grabbed && pinchRatio > GRAB_OFF) endGrab(now);
@@ -236,6 +248,44 @@ function classify(lm, pinchRatio) {
   if (f[0] && f[1] && n === 2) return "TWO_FINGERS";
   if (f[0] && f[1] && f[2] && n === 3) return "THREE_FINGERS";
   return null;
+}
+
+// EMA landmark smoothing, used only for discrete-gesture classification — aim
+// pointing and the AI-mode conducting pinch read raw landmarks so they don't lag.
+function smoothLandmarks(lm) {
+  if (!smoothLm || smoothLm.length !== lm.length) {
+    smoothLm = lm.map((p) => ({ x: p.x, y: p.y, z: p.z }));
+    return smoothLm;
+  }
+  for (let i = 0; i < lm.length; i++) {
+    smoothLm[i].x += SMOOTH_ALPHA * (lm[i].x - smoothLm[i].x);
+    smoothLm[i].y += SMOOTH_ALPHA * (lm[i].y - smoothLm[i].y);
+    smoothLm[i].z += SMOOTH_ALPHA * (lm[i].z - smoothLm[i].z);
+  }
+  return smoothLm;
+}
+
+// Confirm a new gesture only after CONFIRM_FRAMES consecutive frames, and only
+// drop an active one after RELEASE_FRAMES consecutive misses — a single noisy
+// classification can neither restart a hold nor prematurely end one.
+function updateGesture(g, xm, now) {
+  if (cvGesture !== null) {
+    if (g === cvGesture) { missCount = 0; return; }
+    missCount++;
+    if (missCount < RELEASE_FRAMES) return;
+    missCount = 0;
+    candGesture = g; candCount = g ? 1 : 0;
+    commitGesture(null, xm);          // release: drop to neutral
+    return;
+  }
+  if (!g) { candGesture = null; candCount = 0; return; }
+  if (g === candGesture) candCount++;
+  else { candGesture = g; candCount = 1; }
+  if (candCount >= CONFIRM_FRAMES && now - lastCommitMs >= COMMIT_COOLDOWN_MS) {
+    lastCommitMs = now;
+    candGesture = null; candCount = 0;
+    commitGesture(g, xm);
+  }
 }
 
 function commitGesture(g, xm) {
