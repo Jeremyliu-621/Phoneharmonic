@@ -731,6 +731,17 @@ class App:
             if sec:
                 sec.volume = max(0.0, min(1.0, float(args.get("volume", 1.0))))
                 self.engine.on_sections_changed(self.session.engine_sections())
+        elif cmd == "clear":
+            # Panic-adjacent but musical: whatever device/envelope/warp is in
+            # flight, back to the song as written at the next bar — without
+            # touching the wand calibration the way recal does.
+            self.engine.reset_conducting()
+            self._tension = 0.0
+            await self.hub.broadcast({"t": P.FX_EXPR, "section": P.SECTION_ALL,
+                                      "semis": 0, "gain": 1.0}, roles=("section", "stage"))
+            await self.hub.broadcast({"t": P.FX_TENSION, "section": P.SECTION_ALL,
+                                      "value": 0.0}, roles=("section", "stage"))
+            self.showlog.record("conduct.clear")
         elif cmd == "device":
             # The camera's ONE sanctioned musical channel (demo hand-signs:
             # thumbs-up/down, victory, rock). Same deterministic trigger path

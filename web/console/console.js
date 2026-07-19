@@ -632,6 +632,11 @@ document.querySelectorAll(".vdev").forEach((b) =>
     b.classList.add("on");
     setTimeout(() => b.classList.remove("on"), 900);
   }));
+el("vclear").addEventListener("click", () => {
+  conn.send({ t: P.ADMIN_CMD, cmd: "clear" });
+  el("vclear").textContent = "🎼 cleared ✓";
+  setTimeout(() => { el("vclear").textContent = "🎼 clear — as written"; }, 1200);
+});
 let tempoTimer = null;
 el("temposlider").addEventListener("input", () => {
   const bpm = parseInt(el("temposlider").value, 10);
