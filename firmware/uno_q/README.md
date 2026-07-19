@@ -86,6 +86,49 @@ Set the laptop address before running: `WAND_LAPTOP_IP=192.168.137.1` (the app
 reads it in `wand/python/config.py`). Open `wand/` in App Lab and Run, or deploy
 headless with `arduino-app-cli`.
 
+### Headless deploy (no App Lab GUI)
+
+Skip the GUI and drive the board over SSH — this is what App Lab's Run button
+does under the hood, so it's the scriptable/repeatable equivalent:
+
+```bash
+BOARD="arduino@<board>.local"         # the board's mDNS hostname
+REPO="/path/to/Phoneharmonic"
+WAND_APP="/home/arduino/ArduinoApps/phoneharmonic-wand"
+LAPTOP_IP="<this machine's current LAN IP>"
+
+ssh "$BOARD" "arduino-app-cli app stop $WAND_APP" || true   # ok if not running yet
+ssh "$BOARD" "mkdir -p $WAND_APP"
+scp -r "$REPO/firmware/uno_q/wand/." "$BOARD:$WAND_APP/"
+
+# Headless deploys don't forward WAND_LAPTOP_IP into the app process (see
+# docs/debug/networking-debugging.md) — drop wand_config.json next to
+# python/config.py instead; it's checked before auto-discovery.
+printf '{"laptop_ip": "%s"}\n' "$LAPTOP_IP" > /tmp/wand_config.json
+scp /tmp/wand_config.json "$BOARD:$WAND_APP/python/wand_config.json"
+
+ssh "$BOARD" "arduino-app-cli app start $WAND_APP"
+```
+
+Re-run the whole thing on every firmware change — it stops the old instance,
+re-copies `wand/`, rewrites `wand_config.json` (in case the laptop's IP
+changed), and starts fresh.
+
+### Watching the flow end-to-end
+
+1. On the laptop: `.venv/bin/python server/main.py`, run from the repo root
+   in its own terminal tab, left running. Note the LAN IP it prints on
+   startup.
+2. Open `http://<lan-ip>:8080/console/`. Once the board's app is running (the
+   deploy above, or App Lab's Run), the console shows the live pointing beam
+   + lock cone reacting to the physical wand — no other setup needed.
+3. To sanity-check the raw stream without a browser:
+   `python server/tools/wand_watch.py` — prints `WAND CONNECTED` when the
+   board's handshake lands, then a live `yaw_deg` as you rotate the board. If
+   the console's beam never appears, check here first: connected with no
+   `wand:` lines means IMU frames aren't reaching the server (Modulino init
+   or the MCU↔Linux Bridge), not a console/rendering problem.
+
 ## Zero-config connection
 
 Power the board → App Lab **Run** → done. The board finds the laptop by
