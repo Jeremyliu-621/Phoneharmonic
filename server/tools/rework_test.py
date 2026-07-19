@@ -45,18 +45,19 @@ def loaded_conductor() -> Conductor:
 
 
 def units() -> None:
-    print("[1] aiming SOLOS the targeted phone (everyone else mutes, instantly)")
+    print("[1] aiming = edit TARGET: everyone keeps playing, edits land on the aimed phone")
     c = loaded_conductor()
     c.on_aim("s2")
-    cancels = c.get_cancels()
-    assert [sp.section for sp in cancels] == ["s1"], cancels   # in-flight cut, no bar wait
+    assert c.get_cancels() == [], "aiming must not cut anyone (SELECT, not solo)"
     ev = c.get_events(0.0, 0.0)
-    assert ev and {e.section for e in ev} == {"s2"}, {e.section for e in ev}
-    c.on_aim(None)
-    s = c._next_bar_start
-    ev = c.get_events(s, s)
-    assert {e.section for e in ev} == {"s1", "s2"}, {e.section for e in ev}
-    print("    solo -> only s2; release -> both phones again")
+    assert ev and {e.section for e in ev} >= {"s1", "s2"}, {e.section for e in ev}
+    c._gesture_in(GestureFeatures(energy=0.9, size=0.8, duration=0.7), 0.0)
+    assert "s2" in c._sec_state and c._sec_state["s2"].intensity_target > 0.7, \
+        "the push must fork s2's own envelope"
+    assert c._global.intensity_target == 0.5, "the shared feed must be untouched"
+    c.on_aim(None)                              # select all: fold edits back
+    assert c._sec_state == {}, "select-all must clear per-section overrides"
+    print("    aim s2 -> no cuts, push edits only s2; select-all folds back")
 
     print("[2] arranger part map routes parts (round-robin overridden)")
     c = loaded_conductor()
@@ -84,7 +85,7 @@ def units() -> None:
     _cfg.PICKUP = True                            # the sting path still works when enabled
     c = loaded_conductor()
     c.on_classified("sharp_up", 1.0, 400.0)
-    assert c._gesture is not None and c._gesture.vertical == 0.9
+    assert c._global.gesture is not None and c._global.gesture.vertical == 0.9
     assert c._pickup and c._pickup[0][3] == 0.95, "sharp_up should queue the sting"
     c.on_classified("nonsense", 1.0, 500.0)      # unknown label: ignored, no crash
     print("    sharp_up -> features + sting queued; unknown label ignored")
@@ -92,7 +93,7 @@ def units() -> None:
     print("[3c] a swell gesture builds: crescendo + the harmony layer joins")
     c = loaded_conductor()
     c._gesture_in(GestureFeatures(energy=0.6, size=0.5, vertical=0.8, duration=1.2), 400.0)
-    assert c._arc == 4, c._arc
+    assert c._global.arc == 4, c._global.arc
     vels, pads = [], False
     for _ in range(4):
         s = c._next_bar_start
@@ -102,7 +103,7 @@ def units() -> None:
         pads = pads or any(e.inst == "viola" and e.art == "sustain" for e in ev)
     assert vels[-1] > vels[0], f"no crescendo: {vels}"
     assert pads, "harmony pad layer missing during the build"
-    assert c._arc == 0
+    assert c._global.arc == 0
     print(f"    mean velocities {[round(v, 2) for v in vels]} + voice-led pads ✓")
 
     print("[4] arranger JSON parsing: fences, prose, dupes, leftovers")
