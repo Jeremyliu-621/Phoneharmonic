@@ -240,10 +240,20 @@ function processHand(lm, now) {
   const xm = 1 - tip.x;   // mirror x for a selfie-natural feel
 
   // ── discrete gesture layer: smoothed + debounced, drives transport/cv.state ──
-  const slm = smoothLandmarks(lm);
-  const sHandW = dist(slm[INDEX_MCP], slm[PINKY_MCP]) || 0.001;
-  const sPinchRatio = dist(slm[THUMB_TIP], slm[INDEX_TIP]) / sHandW;
-  updateGesture(classify(slm, sPinchRatio), xm, now);
+  // PINCH IS MODAL: from the instant a pinch starts arming until the fingers
+  // clearly open (GRAB_OFF hysteresis), the classifier looks for NOTHING else.
+  // Mid-pinch frames read as fists/signs and were breaking the pinch — once
+  // you're pinching, the only question is "still pinching?".
+  const pinchOwnsHand = grabbed || pinchSince !== null;
+  if (pinchOwnsHand) {
+    if (cvGesture !== "PINCH") { cvGesture = "PINCH"; sendCvState(); }
+    candGesture = null; candCount = 0; missCount = 0;
+  } else {
+    const slm = smoothLandmarks(lm);
+    const sHandW = dist(slm[INDEX_MCP], slm[PINKY_MCP]) || 0.001;
+    const sPinchRatio = dist(slm[THUMB_TIP], slm[INDEX_TIP]) / sHandW;
+    updateGesture(classify(slm, sPinchRatio), xm, now);
+  }
 
   // Conducting, mode poses, select/aim and the wand.pose stream stay CUT: the
   // camera never conducts (the server drops wand.* from the cv role). What it
@@ -292,6 +302,12 @@ function classify(lm, pinchRatio) {
   if (b && b.score >= 0.5) {
     if (b.categoryName === "Closed_Fist") return "FIST";
     if (b.categoryName === "Open_Palm") return "PALM";
+    // Demo hand-signs for the four devices — trained labels only, so they
+    // hold up under stage lighting: 👍 harmony · 👎 hush · ✌️ runs · 🤟 arpeggio
+    if (b.categoryName === "Thumb_Up") return "THUMB_UP";
+    if (b.categoryName === "Thumb_Down") return "THUMB_DOWN";
+    if (b.categoryName === "Victory") return "VICTORY";
+    if (b.categoryName === "ILoveYou") return "ROCK";
   }
   if (pinchRatio < GRAB_ON) return "PINCH";
   return null;
@@ -340,6 +356,15 @@ function updateGesture(g, xm, now) {
 // COMMITMENT: hold the pose ~1.2s before it fires, so a passing open hand
 // can't stop the show.
 const TRANSPORT_HOLD_MS = 1200;
+const DEVICE_HOLD_MS = 900;   // device signs commit a touch faster than transport
+// Demo hand-signs -> the four musical devices (fires admin.cmd device, the
+// camera's ONE sanctioned musical channel; wand.* stays blocked for this role).
+const SIGN_DEVICE = {
+  THUMB_UP: ["HARMONY", "👍 harmony"],
+  THUMB_DOWN: ["HUSH", "👎 hush"],
+  VICTORY: ["RUNS", "✌️ runs"],
+  ROCK: ["ARPEGGIO", "🤟 arpeggio"],
+};
 let holdSince = 0, holdFired = false;
 
 function commitGesture(g, xm) {
@@ -348,6 +373,7 @@ function commitGesture(g, xm) {
   holdFired = false;
   if (g === "PALM" && !playing) flashCmd("✋ hold to play…");
   else if (g === "FIST" && playing) flashCmd("✊ hold to pause…");
+  else if (SIGN_DEVICE[g]) flashCmd(`${SIGN_DEVICE[g][1]} — hold…`);
   sendCvState();
 }
 
@@ -360,13 +386,19 @@ function tickTransportHold(now) {
   // mixer sits there long enough for the 1.2s fist hold to pause the show
   // underneath it, every single time.
   if (grabbed || pinchSince !== null) { holdSince = now; return; }
-  if (holdFired || !cvGesture || now - holdSince < TRANSPORT_HOLD_MS) return;
-  if (cvGesture === "PALM" && !playing) {
+  if (holdFired || !cvGesture) return;
+  const held = now - holdSince;
+  if (cvGesture === "PALM" && !playing && held >= TRANSPORT_HOLD_MS) {
     playing = true; holdFired = true;
     send({ t: P.ADMIN_CMD, cmd: "start" }); flashCmd("✋ play");
-  } else if (cvGesture === "FIST" && playing) {
+  } else if (cvGesture === "FIST" && playing && held >= TRANSPORT_HOLD_MS) {
     playing = false; holdFired = true;
     send({ t: P.ADMIN_CMD, cmd: "stop" }); flashCmd("✊ pause");
+  } else if (SIGN_DEVICE[cvGesture] && held >= DEVICE_HOLD_MS) {
+    const [device, label] = SIGN_DEVICE[cvGesture];
+    holdFired = true;
+    send({ t: P.ADMIN_CMD, cmd: "device", args: { name: device } });
+    flashCmd(label);
   }
 }
 

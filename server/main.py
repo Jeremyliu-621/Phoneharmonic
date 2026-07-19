@@ -510,7 +510,7 @@ class App:
         if t == P.ADMIN_CMD and conn.role in P.WAND_ROLES:
             # The camera is TRANSPORT-ONLY: play/pause, nothing the wand does
             # (no aiming, no timeline scrubs). Real wands keep the full set.
-            verbs = (("start", "stop") if conn.role == "wand-cv"
+            verbs = (("start", "stop", "device") if conn.role == "wand-cv"
                      else ("start", "stop", "rewind", "forward", "aim"))
             if msg.get("cmd") in verbs:
                 await self._admin(msg.get("cmd"), msg.get("args") or {})
@@ -731,6 +731,14 @@ class App:
             if sec:
                 sec.volume = max(0.0, min(1.0, float(args.get("volume", 1.0))))
                 self.engine.on_sections_changed(self.session.engine_sections())
+        elif cmd == "device":
+            # The camera's ONE sanctioned musical channel (demo hand-signs:
+            # thumbs-up/down, victory, rock). Same deterministic trigger path
+            # as the wand's pads — wand.* stays blocked for the cv role.
+            name = str(args.get("name", "")).upper()
+            if name in ("HARMONY", "HUSH", "RUNS", "ARPEGGIO"):
+                self.engine.on_stroke(name, {}, server_time_ms())
+                self.showlog.record("cv.device", device=name)
         elif cmd == "kick":
             # Stage-management: tap a card, hit Backspace — the slot is gone
             # (ghost phones from testing clutter the map before a show).
