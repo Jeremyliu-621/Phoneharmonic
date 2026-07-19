@@ -520,17 +520,19 @@ el("tup").addEventListener("click", () => nudgeTempo(4));
 // camera hub — seamless: the camera wand is simply ON. The iframe loads at
 // boot (its page auto-starts the webcam; the browser's permission prompt is
 // the only gate). Insecure origins (LAN IP over http) get a quiet steer to
-// localhost instead — phones keep joining via the QR either way.
+// HTTPS instead — phones keep joining via the QR either way. When TLS is
+// configured, the server also upgrades a LAN :8080 console request to :8443.
 if (window.isSecureContext) {
   el("camframe").src = `../cvwand/?s=${encodeURIComponent(session)}`;
   camStarted = true;
 } else {
   const local = `http://localhost:${location.port || 80}${location.pathname}${location.search}`;
+  const secure = `https://${location.hostname}:8443${location.pathname}${location.search}`;
   el("camhint").innerHTML =
-    `<div class="big">🔒 Camera needs localhost</div>
-     <div class="sub">On the hosting laptop open
-       <a href="${local}">localhost:${location.port || 80}</a>
-       — music still works here, and phones keep using the QR.</div>`;
+    `<div class="big">🔒 Camera needs HTTPS</div>
+     <div class="sub">Open <a href="${secure}">the secure LAN console</a>
+       or, on the hosting laptop, <a href="${local}">localhost:${location.port || 80}</a>.
+       Music still works here, and phones keep using the QR.</div>`;
   el("camhint").hidden = false;
 }
 // Audio needs one real user gesture — take the first click/tap anywhere.

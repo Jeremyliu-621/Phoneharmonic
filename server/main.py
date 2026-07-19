@@ -52,7 +52,7 @@ from recording.recorder import GestureRecorder
 from scheduler import Scheduler
 from session import Section, SessionState, WandSlot
 from showlog import ShowLog
-from static_files import build_static_response
+from static_files import build_static_response, redirect_response
 from wandio import WandAimer, WandRouter
 
 PAD_CANDIDATES = list(GENERATORS)   # MPR121 pads 0-5 force these; pad up = auto
@@ -114,6 +114,7 @@ class App:
         self._last_tension_ms = 0.0
         self._last_expr = (0, 1.0)              # deterministic-mode (semis, gain) throttle
         self._last_expr_ms = 0.0
+        self.https_enabled = False
         self._vibe_task: asyncio.Task | None = None
 
     # --- session persistence + roster hygiene ---
@@ -195,8 +196,21 @@ class App:
     # --- static + WS routing ---
     def process_request(self, connection: ServerConnection, request):
         # Returning None lets the WebSocket handshake proceed; a Response serves HTTP.
-        if request.path.split("?", 1)[0].rstrip("/") in (WS_PATH, WS_PATH.rstrip("/")):
+        path = request.path.split("?", 1)[0]
+        if path.rstrip("/") in (WS_PATH, WS_PATH.rstrip("/")):
             return None
+        # Camera APIs are unavailable on a plain-http LAN origin. Once the TLS
+        # listener is configured, make the familiar :8080 console URL upgrade
+        # itself to the secure :8443 origin. Keep localhost on HTTP: browsers
+        # explicitly treat localhost as secure, and the section/ESP32 routes
+        # must remain reachable over plain HTTP.
+        host = request.headers.get("Host", "").rsplit(":", 1)[0].strip("[]").lower()
+        is_loopback = host in ("localhost", "127.0.0.1", "::1")
+        is_tls = connection.transport.get_extra_info("ssl_object") is not None
+        if self.https_enabled and not is_tls and not is_loopback \
+                and (path == "/" or path.startswith("/console")):
+            url_host = format_url_host(self.lan_ip)
+            return redirect_response(f"https://{url_host}:{HTTPS_PORT}{request.path}")
         if request.path == "/" or not request.path.startswith(WS_PATH):
             return build_static_response(request.path)
         return None
@@ -942,6 +956,7 @@ def build_ssl_context() -> ssl.SSLContext | None:
 async def main() -> None:
     app = App()
     ssl_ctx = build_ssl_context()
+    app.https_enabled = ssl_ctx is not None
 
     log.info("LAN IP detected: %s", app.lan_ip)
     if _ip_score(app.lan_ip) <= 0:
@@ -951,6 +966,8 @@ async def main() -> None:
     log.info("open on this laptop:  http://localhost:%d/", HTTP_PORT)
     url_host = format_url_host(app.lan_ip)
     log.info("console:      http://%s:%d/console/", url_host, HTTP_PORT)
+    if ssl_ctx is not None:
+        log.info("secure console: https://%s:%d/console/", url_host, HTTPS_PORT)
     log.info("section join: http://%s:%d/section/?s=%s", url_host, HTTP_PORT, DEFAULT_SESSION)
     asyncio.create_task(app.prune_loop())
     if not os.environ.get("WM_DISCOVERY_OFF"):
