@@ -152,14 +152,28 @@ class Conductor:
                 self._cancels.append(CancelSpec(allnotesoff=True))
             self._playing = True
             self._reanchor = False               # start's clean anchor wins over a pending reanchor
-            self._next_bar_idx = 0
             self._next_bar_start = t0_ms or 0.0
-            self._anchor_ms = self._next_bar_start
-            self._reanchor = False   # a fresh start supersedes a pending load re-anchor
-            log.info("transport start @%.0f  bar=%.0fms (%.0f BPM)",
-                     self._next_bar_start, self.bar_ms, self.song.bpm)
+            # Resume from wherever the bar cursor was left (e.g. a FIST pause)
+            # instead of always restarting the song at bar 0 — `_next_bar_idx`
+            # is left untouched by stop/pause, so this only reanchors the
+            # *timing*. A genuinely fresh song still starts at 0 because
+            # `_next_bar_idx` is 0 until playback advances it, and a newly
+            # loaded song forces its own reset via `_reanchor` in get_events().
+            self._anchor_ms = self._next_bar_start - self._next_bar_idx * self.bar_ms
+            log.info("transport start @%.0f  bar=%d/%.0fms (%.0f BPM)",
+                     self._next_bar_start, self._next_bar_idx, self.bar_ms, self.song.bpm)
         elif cmd in ("rewind", "forward"):       # palm-swipe time jump, beat-locked
             self._next_bar_idx = max(0, self._next_bar_idx + (-4 if cmd == "rewind" else 4))
+            if self._playing and t0_ms is not None:
+                # Jump the clock along with the bar cursor so the change is
+                # audible immediately and the editor playhead reflects it,
+                # instead of silently drifting until the next bar boundary
+                # (previously only `_next_bar_idx` moved, so the scheduler kept
+                # ticking on the OLD anchor and nothing visibly happened for
+                # up to a full bar).
+                self._cancels.append(CancelSpec(allnotesoff=True))
+                self._next_bar_start = t0_ms + max(2 * MIN_LEAD_MS, 200.0)
+                self._anchor_ms = self._next_bar_start - self._next_bar_idx * self.bar_ms
             log.info("timeline %s -> bar %d", cmd, self._next_bar_idx)
         elif cmd in ("stop", "allnotesoff"):
             self._playing = False

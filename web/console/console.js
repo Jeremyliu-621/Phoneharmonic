@@ -384,6 +384,14 @@ function drawLane(canvas, track, bars, col) {
 
 // ── bottom roll ──────────────────────────────────────────────────────────────
 const WINDOW_MS = 4200, FUTURE_MS = 1500, RLO = 36, RHI = 96;
+// The roll's x-position is purely a function of wall-clock "now" vs. each
+// note's timestamp — nothing in it ever consulted `transport.playing`, so
+// even correctly-held notes kept crawling left forever because real time
+// itself never stops. `rollNow` holds still while paused, and on resume eases
+// back up to live time over a few frames instead of snapping straight to it
+// (a live note's real timestamp never moved while frozen, so jumping directly
+// to "now" would yank every bar sideways in one frame).
+let rollNow = null;
 function drawRoll() {
   // try/finally: one bad frame must never kill the animation loop for good —
   // a dead rAF chain looks exactly like "the roll stopped working".
@@ -394,12 +402,19 @@ function drawRoll() {
     const H = (canvas.height = canvas.clientHeight * dpr);
     const ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, W, H);
-    const now = clock && clock.theta !== null ? clock.serverNow() : null;
-    if (now === null) return;
+    const live = clock && clock.theta !== null ? clock.serverNow() : null;
+    const playing = !!(transport && transport.playing);
+    if (live != null) {
+      if (rollNow == null) rollNow = live;
+      else if (playing) {
+        const gap = live - rollNow;
+        rollNow += Math.abs(gap) < 4 ? gap : gap * 0.35;   // ease in, then snap the last bit
+      }
+      // else: paused — rollNow holds at whatever it last was, untouched.
+    }
+    const now = rollNow;
+    if (now == null) return;
     const pxPerMs = W / WINDOW_MS;
-    const headX = W - FUTURE_MS * pxPerMs;
-    ctx.strokeStyle = "rgba(54,38,25,.5)"; ctx.lineWidth = 1.5 * dpr;
-    ctx.beginPath(); ctx.moveTo(headX, 0); ctx.lineTo(headX, H); ctx.stroke();
     for (let i = notes.length - 1; i >= 0; i--) {
       const n = notes[i];
       const x = W - (now + FUTURE_MS - n.at) * pxPerMs;
@@ -466,6 +481,11 @@ conn.on(P.SCHED_NOTES, (m) => {
     if (started && readyCount === 0 && e.section === P.SECTION_ALL) synth.schedule(e);
   }
 });
+// allnotesoff (FIST/stop): kill the audio only. The roll itself now freezes
+// on `transport.playing` going false (see drawRoll), so there's no need to
+// touch `notes` here — trying to prune it on pause made already-visible
+// upcoming bars vanish outright, which read as worse than the thing being
+// fixed. Left untouched, they just sit frozen in place until resume.
 conn.on(P.SCHED_CANCEL, (m) => { if (m.allnotesoff) synth.panic(); });
 // hardware-wand streaming (~7 Hz): pointing beam + live meters + stroke intent
 const STROKE_LABELS = {

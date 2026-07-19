@@ -488,6 +488,12 @@ class App:
                 self.wand.reset()
                 log.info("wand slot adopted by %s", conn.client_id[:8])
                 await self._broadcast_roster()   # the UI must see the wand come alive
+                # The hello-time sync in `_bind_section` no-ops here (the slot wasn't
+                # adopted yet), so a fresh camera boots assuming `playing=true`/mode
+                # "AI" with nothing to correct it — a PALM sent while the show was
+                # actually already stopped gets silently swallowed by its own
+                # edge-detection guard. Tell it the truth now that it owns the slot.
+                await self._notify_wand()
             elif conn.client_id != self._wand_client:
                 return
 
@@ -599,7 +605,10 @@ class App:
                                 f"The set just ended after {m['events']} logged moments. "
                                 f"Its fingerprint hash is {m['head_hash'][:12]}. Send the crowd off.")
         elif cmd in ("rewind", "forward"):
-            self.engine.on_transport(cmd, None)
+            # A real timestamp (not None) lets the conductor reanchor the clock
+            # to the jump immediately instead of only moving the bar cursor and
+            # leaving playback to catch up on the next natural bar boundary.
+            self.engine.on_transport(cmd, server_time_ms())
         elif cmd == "allnotesoff":
             self.engine.on_transport("allnotesoff", None)
         elif cmd == "tempo":
