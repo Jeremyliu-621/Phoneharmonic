@@ -58,6 +58,20 @@ from wandio import ShakeDetector, WandAimer, WandRouter
 PAD_CANDIDATES = list(GENERATORS)   # MPR121 pads 0-5 force these; pad up = auto
 SELECT_ALL_LATCH_MS = 1500.0        # shake holds aim at "all" this long before pointing resumes control
 
+# CV wand, DET mode, pinch-drag: the webcam's answer to the hardware wand's
+# tilt-driven expression. Vertical fingertip position is a volume fader and
+# horizontal hand SPEED is a tempo dial, both applied to every instrument.
+# Normalized camera coords: xm/y span [0,1] across the frame.
+CV_SPEED_WINDOW_MS = 250.0    # rolling window the tempo speed is measured over
+CV_TEMPO_DEADZONE = 0.05      # units/s below this holds tempo — a pure vertical
+                              # (volume-only) drag must not also drag tempo down
+CV_TEMPO_REF_SLOW = 0.10      # units/s: a slow deliberate drift -> tempo floor
+CV_TEMPO_REF_FAST = 2.5       # units/s: a brisk swipe across ~half the frame -> ceiling
+CV_TEMPO_MULT_MIN = 0.7       # -> bpm at DET entry * 0.7
+CV_TEMPO_MULT_MAX = 1.4       # -> bpm at DET entry * 1.4
+CV_GAIN_THROTTLE_MS = 100.0   # matches the hw wand's _expression() precedent
+CV_TEMPO_THROTTLE_MS = 150.0  # longer: velocity-derived, wants the extra debounce
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)-6s %(levelname)-7s %(message)s")
 log = logging.getLogger("main")
 
@@ -117,6 +131,15 @@ class App:
         self._last_tension_ms = 0.0
         self._last_expr = (0, 1.0)              # deterministic-mode (semis, gain) throttle
         self._last_expr_ms = 0.0
+        # CV wand DET-mode pinch-drag. Kept separate from _last_expr above: that
+        # tuple's shape is coupled to the hw wand's det_param branches, and this
+        # path also drives tempo, which the hw one never does.
+        self._cv_pinching = False
+        self._cv_speed_buf: list[tuple[float, float]] = []   # rolling (tw, xm)
+        self._cv_last_speed = 0.0               # held across frames with too small a dt
+        self._cv_tempo_ref_bpm = self.engine.base_bpm        # re-anchored on DET entry
+        self._cv_last_gain, self._cv_last_gain_ms = 1.0, 0.0
+        self._cv_last_bpm, self._cv_last_bpm_ms = self.engine.base_bpm, 0.0
         self.https_enabled = False
         self._vibe_task: asyncio.Task | None = None
 
@@ -489,6 +512,8 @@ class App:
                 self._wand_client = conn.client_id
                 self.session.wand = WandSlot(connected=True, variant=P.WAND_VARIANT[conn.role])
                 self.wand.reset()
+                self._cv_pinching = False       # never inherit the last owner's pinch
+                self._cv_speed_buf = []
                 log.info("wand slot adopted by %s", conn.client_id[:8])
                 await self._broadcast_roster()   # the UI must see the wand come alive
                 # The hello-time sync in `_bind_section` no-ops here (the slot wasn't
@@ -510,11 +535,21 @@ class App:
             await self._update_aim(frames)
             return
         if t == P.WAND_POSE:
-            self.wand.on_pose(msg.get("frames", []))
+            frames = msg.get("frames", [])
+            self.wand.on_pose(frames)
+            # det + cv: the same pose stream is a live volume/tempo controller
+            # while pinched (the camera's stand-in for the hw wand's tilt).
+            if (self.session.wand.mode == "det" and self.session.wand.variant == "cv"
+                    and self._cv_pinching):
+                await self._cv_expression(frames)
             return
         if t == P.WAND_GRAB:
             if self.session.wand.mode != "det":  # det mode: continuous control, no gesture windows
                 self.wand.on_grab(msg.get("state", ""), server_time_ms())
+            elif self.session.wand.variant == "cv":
+                self._cv_on_grab(msg.get("state", ""))
+            # det + hw/sim: still a no-op — those aim/express continuously off
+            # wand.imu tilt and have no grab concept at all.
             return
         if t == P.WAND_MODE:                    # physical toggle: ai composes / det controls
             mode = "det" if msg.get("mode") == "det" else "ai"
@@ -526,6 +561,16 @@ class App:
             if changed:
                 self.session.wand.mode = mode
                 self.wand.reset()               # a mid-grab toggle must not strand a window
+                self._cv_pinching = False       # ...nor strand a CV pinch-drag
+                self._cv_speed_buf = []
+                self._cv_last_speed = 0.0
+                self._cv_last_gain, self._cv_last_gain_ms = 1.0, 0.0
+                if mode == "det":
+                    # Anchor the tempo dial to wherever the show actually sits
+                    # as DET is entered, so repeated pinches don't drift off
+                    # our own earlier set_tempo() calls.
+                    self._cv_tempo_ref_bpm = self.engine.base_bpm
+                self._cv_last_bpm, self._cv_last_bpm_ms = self.engine.base_bpm, 0.0
                 # Any mode/param change releases the previous warp everywhere, so a
                 # parameter never sticks after the wand stops controlling it.
                 await self.hub.broadcast({"t": P.FX_EXPR, "section": P.SECTION_ALL,
@@ -772,6 +817,73 @@ class App:
         await self.hub.broadcast({"t": P.FX_EXPR, "section": aim or P.SECTION_ALL,
                                   "semis": semis, "gain": gain}, roles=("section", "stage"))
 
+    def _cv_on_grab(self, kind: str) -> None:
+        """Pinch edges from the CV wand in DET mode. The pinch is the window:
+        expression only tracks the hand while it's held closed."""
+        if kind == "start":
+            self._cv_pinching = True
+            # Drop samples from before the release — diffing across that gap
+            # would read as one enormous jump in speed.
+            self._cv_speed_buf = []
+        elif kind == "end":
+            self._cv_pinching = False
+            # Gain/tempo deliberately keep their last commanded value: letting
+            # go freezes what you dialled in, it doesn't snap back to neutral.
+
+    async def _cv_expression(self, frames: list) -> None:
+        """DET mode, CV wand, pinch held: the hand is a two-axis controller.
+        Vertical fingertip position is an absolute volume fader (top = loud);
+        horizontal SPEED is an absolute tempo dial (fast = quicker, slow =
+        slower) measured over a short rolling window, since frame-to-frame
+        deltas at this cadence are mostly tracking jitter. Both always apply to
+        every instrument, never just the aimed one. Malformed rows are skipped
+        the same way _expression() guards its single row."""
+        rows = []
+        for f in frames:
+            if len(f) < 3:
+                continue
+            try:
+                rows.append((float(f[0]), float(f[1]), float(f[2])))   # tw, xm, y
+            except (TypeError, ValueError):
+                continue
+        if not rows:
+            return
+        now = server_time_ms()
+
+        # Volume: direct position. y = 0 is the top of the frame, so raising the
+        # hand raises the gain. Same 0.3-1.2 span as the hw wand's volume param.
+        y = max(0.0, min(1.0, rows[-1][2]))
+        gain = round(0.3 + 0.9 * (1.0 - y), 3)
+        if gain != self._cv_last_gain and now - self._cv_last_gain_ms >= CV_GAIN_THROTTLE_MS:
+            self._cv_last_gain, self._cv_last_gain_ms = gain, now
+            await self.hub.broadcast({"t": P.FX_EXPR, "section": P.SECTION_ALL,
+                                      "semis": 0, "gain": gain}, roles=("section", "stage"))
+
+        # Tempo: horizontal speed over the rolling window. _cv_last_speed
+        # persists when the window is too short to measure, so a fresh pinch
+        # doesn't snap the tempo to its floor before any real motion happens.
+        self._cv_speed_buf.extend((tw, xm) for tw, xm, _ in rows)
+        cutoff = self._cv_speed_buf[-1][0] - CV_SPEED_WINDOW_MS
+        self._cv_speed_buf = [(tw, xm) for tw, xm in self._cv_speed_buf if tw >= cutoff]
+        if len(self._cv_speed_buf) >= 2:
+            t0, x0 = self._cv_speed_buf[0]
+            t1, x1 = self._cv_speed_buf[-1]
+            dt = (t1 - t0) / 1000.0
+            if 0.03 < dt < 0.5:              # same degenerate-span guard as WandAimer
+                self._cv_last_speed = abs(x1 - x0) / dt
+        if self._cv_last_speed < CV_TEMPO_DEADZONE:
+            return                           # holding still: leave tempo where it is
+        # Log scale: both perceived speed and tracked velocity skew that way, so
+        # a linear map would bunch most of the useful range up at one end.
+        lo, hi = math.log(CV_TEMPO_REF_SLOW), math.log(CV_TEMPO_REF_FAST)
+        span = max(1e-6, hi - lo)
+        t_norm = max(0.0, min(1.0, (math.log(max(self._cv_last_speed, 1e-3)) - lo) / span))
+        mult = CV_TEMPO_MULT_MIN + t_norm * (CV_TEMPO_MULT_MAX - CV_TEMPO_MULT_MIN)
+        bpm = round(self._cv_tempo_ref_bpm * mult, 1)   # set_tempo clamps 40-220
+        if bpm != self._cv_last_bpm and now - self._cv_last_bpm_ms >= CV_TEMPO_THROTTLE_MS:
+            self._cv_last_bpm, self._cv_last_bpm_ms = bpm, now
+            self.engine.set_tempo(bpm)
+
     async def _notify_wand(self) -> None:
         """Reflect show state (pause/play, ai/det mode, selected phone) back to
         the hardware wand so the board can drive its LED/haptics. No-op unless a
@@ -958,6 +1070,10 @@ class App:
             self.session.wand = WandSlot()
             self._wand_client = None
             self.wand.reset()                   # never leave a grab open across a drop
+            self._cv_pinching = False           # ...including a CV pinch-drag
+            self._cv_speed_buf = []
+            # Gain/tempo keep their last value, matching the hw wand: a drop
+            # doesn't reset what was dialled in.
         await self._broadcast_roster()
 
     async def _sections_changed(self) -> None:

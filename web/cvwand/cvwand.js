@@ -26,6 +26,10 @@ const INDEX_PIP = 6, MIDDLE_TIP = 12, MIDDLE_PIP = 10, RING_TIP = 16, RING_PIP =
 // Pinch hysteresis: grab when the thumb–index gap (relative to hand width) drops
 // below GRAB_ON, release when it rises above GRAB_OFF. Two thresholds prevent flicker.
 const GRAB_ON = 0.55, GRAB_OFF = 0.80;
+// Tighter pinch threshold used only to disambiguate fist vs. pinch when every
+// finger reads curled (see classify()) — a deliberate pinch is an actual touch,
+// a fist's incidental thumb proximity is close but rarely this tight.
+const GRAB_ON_TIGHT = 0.30;
 
 const POSE_BATCH = 4;         // frames per wand.pose packet
 const TRAIL_LEN = 48;
@@ -58,7 +62,8 @@ let playing = true;
 
 // ── the demo-flow gesture vocabulary (docs/demo_flow.md) ─────────────────────
 // The webcam hand sets MODES and transport; conducting happens in AI mode.
-//   ✋ PALM = play      ✊ FIST = pause     🤏 PINCH: AI = conduct, else scrub ±4 bars
+//   ✋ PALM = play      ✊ FIST = pause     🤏 PINCH: AI = conduct, DET = drag
+//                  ↕ volume + swipe ↔ tempo (every instrument), else inert
 //   ☝ ONE_FINGER = SELECT (point at an instrument to target AI/DET edits at
 //                  it, nothing is muted; shake to target "all" instead)
 //   ✌ TWO_FINGERS = DETERMINISTIC mode    🤟 THREE_FINGERS = AI mode
@@ -204,12 +209,16 @@ function processHand(lm, now) {
   const g = classify(slm, sPinchRatio);
   updateGesture(g, xm, now);
 
-  // ── conducting pinch: INSTANT in AI mode, off raw landmarks (the feel stays exactly as-is) ─
-  if (cvMode === "AI") {
+  // ── conducting/expression pinch: INSTANT, off raw landmarks (the feel stays
+  // exactly as-is). AI mode: grab bounds an AI conducting-gesture window.
+  // DET mode: grab bounds a pinch-drag window the server reads continuously
+  // off this same wand.pose stream — ↕ position = volume, ↔ speed = tempo,
+  // applied to every instrument (see server _cv_expression).
+  if (cvMode === "AI" || cvMode === "DETERMINISTIC") {
     if (!grabbed && pinchRatio < GRAB_ON) startGrab(now);
     else if (grabbed && pinchRatio > GRAB_OFF) endGrab(now);
   } else if (grabbed) {
-    endGrab(now);                       // left AI mode mid-grab: close the window
+    endGrab(now);                       // left AI/DET mode mid-grab: close the window
   }
 
   // ── mode behaviours ───────────────────────────────────────────────────────
@@ -217,11 +226,8 @@ function processHand(lm, now) {
     if (detectShake(xm, now)) selectAll(now);
     else if (now >= selectAllUntil) aimAt(xm, now);
   }
-  // Rewind/forward via pinch-drag is disabled for now: the bar jump wasn't
-  // landing reliably. Pinch still classifies normally for cv.state/mode use,
-  // it just no longer drives the timeline.
 
-  // Pose frame stream (the server only buffers these inside AI-mode grabs).
+  // Pose frame stream (the server only buffers/reads these inside a grab).
   const roll = Math.atan2(lm[MIDDLE_MCP].y - lm[WRIST].y, lm[MIDDLE_MCP].x - lm[WRIST].x) * 180 / Math.PI;
   poseBuf.push([Math.round(now), +xm.toFixed(4), +tip.y.toFixed(4), +tip.z.toFixed(4), +roll.toFixed(1)]);
   if (poseBuf.length >= POSE_BATCH) flushPose();
@@ -237,11 +243,15 @@ function classify(lm, pinchRatio) {
              ext(RING_TIP, RING_PIP), ext(PINKY_TIP, PINKY_PIP)];
   const n = f.filter(Boolean).length;
   // A closed fist's thumb naturally rests near/over the curled fingers, which
-  // reads as a thumb-index pinch — check for the fist (all four curled) FIRST
-  // so it can never be swallowed by the pinch branch below. That swallow was
-  // the real bug: FIST silently became PINCH, so pause never committed and
-  // closing your hand instead spammed the non-AI scrub path (rewind).
-  if (n === 0) return "FIST";
+  // reads as a loose thumb-index pinch — that swallow was the real bug: FIST
+  // silently became PINCH, so pause never committed and closing your hand
+  // instead spammed the non-AI scrub path (rewind). But a deliberate pinch with
+  // the rest of the hand also relaxed/curled (how most people actually pinch)
+  // reads as n===0 too, so a flat "n===0 wins" rule swallows pinch the other
+  // way. When every finger curls, use the tighter GRAB_ON_TIGHT threshold to
+  // tell them apart: a real pinch is an actual touch, a fist's incidental
+  // thumb proximity is close but rarely that tight.
+  if (n === 0) return pinchRatio < GRAB_ON_TIGHT ? "PINCH" : "FIST";
   if (pinchRatio < GRAB_ON) return "PINCH";
   if (n === 4) return "PALM";
   if (f[0] && n === 1) return "ONE_FINGER";
@@ -302,12 +312,16 @@ function commitGesture(g, xm) {
 
 function setMode(m) {
   if (cvMode === m) return;
+  // A direct mode flip mid-pinch (AI<->DET) must not leave a grab open under
+  // the old mode's meaning — close it now; next frame's hysteresis check
+  // reopens a fresh one under the new mode if the hand is still pinched.
+  if (grabbed) endGrab(performance.now());
   cvMode = m;
   el("mode").textContent = { SELECT: "☝ SELECT", DETERMINISTIC: "✌ DET", AI: "🤟 AI" }[m];
   if (m === "DETERMINISTIC") send({ t: P.WAND_MODE, mode: "det" });
   if (m === "AI") send({ t: P.WAND_MODE, mode: "ai" });
   flashCmd({ SELECT: "☝ select — point at an instrument",
-             DETERMINISTIC: "✌ deterministic mode",
+             DETERMINISTIC: "✌ deterministic — pinch: drag ↕ = volume, swipe ↔ = tempo",
              AI: "🤟 AI mode — pinch + wave to conduct" }[m]);
 }
 

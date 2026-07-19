@@ -384,14 +384,19 @@ function drawLane(canvas, track, bars, col) {
 
 // ── bottom roll ──────────────────────────────────────────────────────────────
 const WINDOW_MS = 4200, FUTURE_MS = 1500, RLO = 36, RHI = 96;
-// The roll's x-position is purely a function of wall-clock "now" vs. each
-// note's timestamp — nothing in it ever consulted `transport.playing`, so
-// even correctly-held notes kept crawling left forever because real time
-// itself never stops. `rollNow` holds still while paused, and on resume eases
-// back up to live time over a few frames instead of snapping straight to it
-// (a live note's real timestamp never moved while frozen, so jumping directly
-// to "now" would yank every bar sideways in one frame).
-let rollNow = null;
+// Every previous attempt insisted on ONE position formula spanning both
+// pre-pause and post-pause notes — which is exactly what forces a trade-off,
+// since reconciling old positions against live "now" always means something
+// has to jump, wipe, or run permanently behind. Dropping that requirement
+// fixes it: on pause, whatever's on screen is frozen as static "ghost"
+// pixels (not recomputed, so nothing can move or jump) that quietly fade out
+// once resumed; brand-new notes render on the live, real-time-accurate
+// formula from the moment they arrive, with no offset at all. Two
+// independent draws, no seam to paper over.
+const ROLL_FADE_MS = 350;
+let rollPlaying = false;
+let ghosts = [];            // {x, y, w, color, alpha} — frozen at pause, fades after resume
+let ghostFadeStart = null;  // live ms when the fade-out began (null = not fading yet)
 function drawRoll() {
   // try/finally: one bad frame must never kill the animation loop for good —
   // a dead rAF chain looks exactly like "the roll stopped working".
@@ -403,29 +408,53 @@ function drawRoll() {
     const ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, W, H);
     const live = clock && clock.theta !== null ? clock.serverNow() : null;
+    if (live == null) return;
     const playing = !!(transport && transport.playing);
-    if (live != null) {
-      if (rollNow == null) rollNow = live;
-      else if (playing) {
-        const gap = live - rollNow;
-        rollNow += Math.abs(gap) < 4 ? gap : gap * 0.35;   // ease in, then snap the last bit
-      }
-      // else: paused — rollNow holds at whatever it last was, untouched.
-    }
-    const now = rollNow;
-    if (now == null) return;
     const pxPerMs = W / WINDOW_MS;
+
+    if (!playing && rollPlaying) {
+      // Just paused: freeze every currently-visible note as a static ghost at
+      // its exact current pixel position, then empty the live queue — the
+      // engine stops scheduling while paused, so there's nothing left for the
+      // live path to draw until we resume.
+      for (const n of notes) {
+        const x = W - (live + FUTURE_MS - n.at) * pxPerMs;
+        const w = Math.max(3 * dpr, n.dur * pxPerMs);
+        if (x + w < 0 || x > W) continue;   // already off-screen — not worth keeping
+        const y = H - ((Math.max(RLO, Math.min(RHI, n.pitch)) - RLO) / (RHI - RLO)) * (H - 8 * dpr) - 4 * dpr;
+        ghosts.push({ x, y, w, color: n.color, alpha: n.at <= live ? 0.95 : 0.4 });
+      }
+      notes.length = 0;
+      ghostFadeStart = null;   // held at full strength until resume, not fading yet
+    }
+    if (playing && !rollPlaying) ghostFadeStart = live;   // resumed: start dissolving now
+    rollPlaying = playing;
+
+    for (let i = ghosts.length - 1; i >= 0; i--) {
+      const g = ghosts[i];
+      let a = g.alpha;
+      if (ghostFadeStart != null) {
+        const t = (live - ghostFadeStart) / ROLL_FADE_MS;
+        if (t >= 1) { ghosts.splice(i, 1); continue; }
+        a = g.alpha * (1 - t);
+      }
+      ctx.globalAlpha = a;
+      ctx.fillStyle = g.color;
+      ctx.fillRect(g.x, g.y - 3 * dpr, g.w, 6 * dpr);
+    }
+    ctx.globalAlpha = 1;
+
     for (let i = notes.length - 1; i >= 0; i--) {
       const n = notes[i];
-      const x = W - (now + FUTURE_MS - n.at) * pxPerMs;
+      const x = W - (live + FUTURE_MS - n.at) * pxPerMs;
       const w = Math.max(3 * dpr, n.dur * pxPerMs);
       if (x + w < 0) { notes.splice(i, 1); continue; }
       if (x > W) {          // not visible yet — but a note stamped in a dead
-        if (n.at - now > 60_000) notes.splice(i, 1);   // timebase never will be
+        if (n.at - live > 60_000) notes.splice(i, 1);   // timebase never will be
         continue;
       }
       const y = H - ((Math.max(RLO, Math.min(RHI, n.pitch)) - RLO) / (RHI - RLO)) * (H - 8 * dpr) - 4 * dpr;
-      ctx.globalAlpha = n.at <= now ? 0.95 : 0.4;
+      ctx.globalAlpha = n.at <= live ? 0.95 : 0.4;
       ctx.fillStyle = n.color;
       ctx.fillRect(x, y - 3 * dpr, w, 6 * dpr);
     }
