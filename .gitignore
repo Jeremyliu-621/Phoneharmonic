@@ -33,7 +33,7 @@ server/tools/rd_token.txt
 Thumbs.db
 .vscode/
 .idea/
-songs/
+songs/*.wav
 server/data/last_song.*
 scratchpad/
 server/data/wand_poses.json
