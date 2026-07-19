@@ -53,9 +53,10 @@ from scheduler import Scheduler
 from session import Section, SessionState, WandSlot
 from showlog import ShowLog
 from static_files import build_static_response, redirect_response
-from wandio import WandAimer, WandRouter
+from wandio import ShakeDetector, WandAimer, WandRouter
 
 PAD_CANDIDATES = list(GENERATORS)   # MPR121 pads 0-5 force these; pad up = auto
+SELECT_ALL_LATCH_MS = 1500.0        # shake holds aim at "all" this long before pointing resumes control
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)-6s %(levelname)-7s %(message)s")
 log = logging.getLogger("main")
@@ -100,6 +101,8 @@ class App:
         self.wand = WandRouter(self.engine, recorder=self.recorder)
         self.scheduler = Scheduler(self.engine, self.hub)
         self.aimer = WandAimer()
+        self.shake = ShakeDetector()
+        self._select_all_until = 0.0            # server-ms; aim forced to None until this passes
         self.strokes = StrokeTracker()          # live stroke intent for the panel
         self.showlog = ShowLog(DEFAULT_SESSION)
         self.announcer = Announcer(self._announce_line)
@@ -527,7 +530,7 @@ class App:
                 # parameter never sticks after the wand stops controlling it.
                 await self.hub.broadcast({"t": P.FX_EXPR, "section": P.SECTION_ALL,
                                           "semis": 0, "gain": 1.0}, roles=("section", "stage"))
-                await self.hub.broadcast({"t": P.FX_TENSION, "value": 0.0},
+                await self.hub.broadcast({"t": P.FX_TENSION, "section": P.SECTION_ALL, "value": 0.0},
                                          roles=("section", "stage"))
                 self.showlog.record("wand.mode", mode=mode, param=self.session.wand.det_param)
                 log.info("wand mode -> %s (%s)", mode, self.session.wand.det_param)
@@ -738,9 +741,9 @@ class App:
         """Deterministic mode: pure COORDINATE control, no motion involved. The
         wand's tilt (gravity direction — an absolute coordinate, drift-free)
         maps to the selected parameter: pitch = scale-locked degrees (quantized,
-        can never sound wrong), volume = a gain sweep, filter = the room-wide
-        tension filter. Streamed to the aimed phone; every other phone reads
-        the section field and resets to neutral."""
+        can never sound wrong), volume = a gain sweep, filter = a tension
+        sweep. All three stream to the aimed phone only; every other phone
+        reads the section field and resets to neutral."""
         row = frames[-1] if frames else None
         if not row or len(row) < 3:
             return
@@ -755,8 +758,8 @@ class App:
             if ("filter", value) == self._last_expr or now - self._last_expr_ms < 100.0:
                 return
             self._last_expr, self._last_expr_ms = ("filter", value), now
-            await self.hub.broadcast({"t": P.FX_TENSION, "value": value},
-                                     roles=("section", "stage"))
+            await self.hub.broadcast({"t": P.FX_TENSION, "section": aim or P.SECTION_ALL,
+                                      "value": value}, roles=("section", "stage"))
             return
         if param == "volume":
             semis, gain = 0, round(0.3 + 0.9 * (tilt + 1) / 2, 3)
@@ -786,7 +789,17 @@ class App:
 
     async def _update_aim(self, frames: list) -> None:
         self.aimer.on_frames(frames)
-        aim = self.aimer.resolve(self._placements())
+        now = server_time_ms()
+        if self.shake.on_frames(frames):
+            # Shaking is unmistakably not a point: since the hardware wand aims
+            # continuously from yaw (no separate SELECT mode to gate it), the
+            # only way to explicitly select "all" is to latch aim to None for
+            # a beat — long enough to let go of the shake before pointing
+            # resumes control, short enough not to feel stuck.
+            self._select_all_until = now + SELECT_ALL_LATCH_MS
+            self.showlog.record("wand.shake")
+            log.info("wand shake -> select all")
+        aim = None if now < self._select_all_until else self.aimer.resolve(self._placements())
         stroke, live, stroke_new = self.strokes.push(frames)   # live intent for the panel
         if self.session.wand.mode == "det":
             await self._expression(frames, aim)
@@ -796,7 +809,6 @@ class App:
             # wand-sim) keep their window path — grabbing suppresses this.
             self.engine.on_stroke(stroke, live, server_time_ms())
             self.showlog.record("wand.stroke", stroke=stroke)
-        now = server_time_ms()
         if aim != self._last_aim:
             self._last_aim = aim
             self.engine.on_aim(aim)

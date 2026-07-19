@@ -30,6 +30,15 @@ const GRAB_ON = 0.55, GRAB_OFF = 0.80;
 const POSE_BATCH = 4;         // frames per wand.pose packet
 const TRAIL_LEN = 48;
 
+// Shake-to-select-all: a fast, repeated back-and-forth sweep while in SELECT
+// mode clears aim to "all" (every instrument), same as the hardware wand's
+// shake. Direction reversals in the fingertip's x are the signal — a real
+// point only moves one way.
+const SHAKE_WINDOW_MS = 500;
+const SHAKE_MIN_DELTA = 0.035;   // per-frame xm jump fast enough to count
+const SHAKE_MIN_REVERSALS = 4;
+const SELECT_ALL_LATCH_MS = 1500; // "all" sticks this long before pointing resumes aiming
+
 const params = new URLSearchParams(location.search);
 const session = params.get("s") || "lol1";
 const el = (id) => document.getElementById(id);
@@ -50,14 +59,16 @@ let playing = true;
 // ── the demo-flow gesture vocabulary (docs/demo_flow.md) ─────────────────────
 // The webcam hand sets MODES and transport; conducting happens in AI mode.
 //   ✋ PALM = play      ✊ FIST = pause     🤏 PINCH: AI = conduct, else scrub ±4 bars
-//   ☝ ONE_FINGER = SELECT (point at an instrument to solo it)
+//   ☝ ONE_FINGER = SELECT (point at an instrument to target AI/DET edits at
+//                  it, nothing is muted; shake to target "all" instead)
 //   ✌ TWO_FINGERS = DETERMINISTIC mode    🤟 THREE_FINGERS = AI mode
 const STABLE_FRAMES = 6;            // discrete gestures debounce; conducting stays instant
 let cvMode = "AI";                  // start ready to conduct
 let rawGesture = null, rawCount = 0, cvGesture = null;
 let roster = [];                    // connected sections, left->right (for SELECT aiming)
 let lastAimId = null, lastAimMs = 0;
-let scrubX = null, lastScrub = 0;
+let shakeBuf = [];                  // {t, xm} recent SELECT-mode samples
+let lastShakeMs = -Infinity, selectAllUntil = 0;
 
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
@@ -190,9 +201,13 @@ function processHand(lm, now) {
   }
 
   // ── mode behaviours ───────────────────────────────────────────────────────
-  if (cvMode === "SELECT" && cvGesture !== "PINCH") aimAt(xm, now);
-  if (cvMode !== "AI" && cvGesture === "PINCH") scrub(xm, now);
-  else scrubX = null;
+  if (cvMode === "SELECT" && cvGesture !== "PINCH") {
+    if (detectShake(xm, now)) selectAll(now);
+    else if (now >= selectAllUntil) aimAt(xm, now);
+  }
+  // Rewind/forward via pinch-drag is disabled for now: the bar jump wasn't
+  // landing reliably. Pinch still classifies normally for cv.state/mode use,
+  // it just no longer drives the timeline.
 
   // Pose frame stream (the server only buffers these inside AI-mode grabs).
   const roll = Math.atan2(lm[MIDDLE_MCP].y - lm[WRIST].y, lm[MIDDLE_MCP].x - lm[WRIST].x) * 180 / Math.PI;
@@ -205,12 +220,17 @@ function processHand(lm, now) {
 
 // One discrete gesture per frame, from the closed cv.state vocabulary.
 function classify(lm, pinchRatio) {
-  if (pinchRatio < GRAB_ON) return "PINCH";
   const ext = (t2, p2) => dist(lm[t2], lm[WRIST]) > dist(lm[p2], lm[WRIST]) * 1.15;
   const f = [ext(INDEX_TIP, INDEX_PIP), ext(MIDDLE_TIP, MIDDLE_PIP),
              ext(RING_TIP, RING_PIP), ext(PINKY_TIP, PINKY_PIP)];
   const n = f.filter(Boolean).length;
+  // A closed fist's thumb naturally rests near/over the curled fingers, which
+  // reads as a thumb-index pinch — check for the fist (all four curled) FIRST
+  // so it can never be swallowed by the pinch branch below. That swallow was
+  // the real bug: FIST silently became PINCH, so pause never committed and
+  // closing your hand instead spammed the non-AI scrub path (rewind).
   if (n === 0) return "FIST";
+  if (pinchRatio < GRAB_ON) return "PINCH";
   if (n === 4) return "PALM";
   if (f[0] && n === 1) return "ONE_FINGER";
   if (f[0] && f[1] && n === 2) return "TWO_FINGERS";
@@ -227,7 +247,6 @@ function commitGesture(g, xm) {
   } else if (g === "ONE_FINGER") setMode("SELECT");
   else if (g === "TWO_FINGERS") setMode("DETERMINISTIC");
   else if (g === "THREE_FINGERS") setMode("AI");
-  else if (g === "PINCH" && cvMode !== "AI") scrubX = xm;   // scrub reference
   sendCvState();
 }
 
@@ -243,7 +262,8 @@ function setMode(m) {
 }
 
 // SELECT mode: the index finger sweeps the connected phones left -> right;
-// pointing solos the one under your finger (the console card glows).
+// pointing targets the one under your finger for AI/DET edits (nothing is
+// muted — every instrument keeps playing; the console card just glows).
 function aimAt(xm, now) {
   if (!roster.length || now - lastAimMs < 350) return;
   const idx = Math.max(0, Math.min(roster.length - 1, Math.floor(xm * roster.length)));
@@ -254,15 +274,34 @@ function aimAt(xm, now) {
   flashCmd(`🎯 ${s.instrument || s.id}`);
 }
 
-// Non-AI pinch: drag left/right to scrub the timeline ±4 bars (beat-locked).
-function scrub(xm, now) {
-  if (scrubX === null) { scrubX = xm; return; }
-  const dx = xm - scrubX;
-  if (Math.abs(dx) > 0.18 && now - lastScrub > 700) {
-    send({ t: P.ADMIN_CMD, cmd: dx > 0 ? "forward" : "rewind" });
-    flashCmd(dx > 0 ? "⏩ forward 4 bars" : "⏪ rewind 4 bars");
-    lastScrub = now; scrubX = xm;
+// A fast back-and-forth sweep (direction reversals in the fingertip's x)
+// reads as a shake rather than a point — used to explicitly target "all".
+function detectShake(xm, now) {
+  shakeBuf.push({ t: now, xm });
+  const cutoff = now - SHAKE_WINDOW_MS;
+  while (shakeBuf.length && shakeBuf[0].t < cutoff) shakeBuf.shift();
+  if (shakeBuf.length < 4) return false;
+  let reversals = 0, prevSign = 0;
+  for (let i = 1; i < shakeBuf.length; i++) {
+    const d = shakeBuf[i].xm - shakeBuf[i - 1].xm;
+    if (Math.abs(d) < SHAKE_MIN_DELTA) continue;
+    const sign = d > 0 ? 1 : -1;
+    if (prevSign && sign !== prevSign) reversals++;
+    prevSign = sign;
   }
+  if (reversals >= SHAKE_MIN_REVERSALS && now - lastShakeMs > SELECT_ALL_LATCH_MS) {
+    lastShakeMs = now;
+    shakeBuf = [];
+    return true;
+  }
+  return false;
+}
+
+function selectAll(now) {
+  lastAimId = "all"; lastAimMs = now;
+  selectAllUntil = now + SELECT_ALL_LATCH_MS;   // let go before pointing resumes aiming
+  send({ t: P.ADMIN_CMD, cmd: "aim", args: { section_id: "all" } });
+  flashCmd("🤚 select all");
 }
 
 function sendCvState() {

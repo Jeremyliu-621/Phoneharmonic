@@ -11,6 +11,7 @@ import itertools
 import logging
 import math
 import secrets
+from dataclasses import dataclass
 
 import config
 from config import MIN_LEAD_MS
@@ -31,6 +32,23 @@ from protocol import SECTION_ALL
 log = logging.getLogger("engine")
 
 
+@dataclass
+class _ConductState:
+    """One section's (or the room's shared) conducting envelope: which
+    gesture is live, how hushed/lifted it is, and the harmonic pad it's
+    holding. SELECT-mode aiming decides who a gesture writes into; every
+    section renders from its OWN state (or the shared one, if it's never
+    been individually aimed) — so editing one instrument never touches
+    another's dynamics, style, or held chord."""
+    gesture: GestureFeatures | None = None
+    intensity: float = 0.5
+    intensity_target: float = 0.5
+    arc: int = 0
+    arc_now: tuple = (1.0, 0.0, False)
+    pad_voices: list[int] | None = None
+    pad_until: int = -1
+
+
 class Conductor:
     def __init__(self) -> None:
         self.song = builtin_song()
@@ -40,26 +58,26 @@ class Conductor:
         self._playing = False
         self._next_bar_idx = 0
         self._next_bar_start = 0.0
-        self._gesture: GestureFeatures | None = None
         self._last_choice: str | None = None
         self._forced: str | None = None                 # editor override; None = let the ranker choose
-        self._aim: str | None = None                    # wand-aimed section (spatial/solo mode)
+        self._aim: str | None = None                    # wand-aimed section: where edits target, nothing more
         self._part_map: dict[int, str] | None = None    # LLM arranger: part idx -> section
         self._pickup: list | None = None                # instant gesture answer, pending emission
-        self._arc = 0                                   # bars left in a build arc (0 = none)
+        self._pickup_section: str | None = None          # which section it targets (None = everyone)
         self._arc_total = 4
-        self._arc_now = (1.0, 0.0, False)               # this bar's (vel_mult, density_floor, climax)
         # The CONDUCTING ENVELOPE: a continuous intensity (0 hushed .. 1 full,
         # 0.5 = the song exactly as written). Gestures push the target; the
         # envelope chases it and both relax toward neutral over ~6-8 bars — so
         # a wave swells the orchestra and it breathes back down, instead of an
         # inserted "altered section". Drives density, dynamics, AND tempo.
-        self._intensity = 0.5
-        self._intensity_target = 0.5
+        # `_global` is the shared feed every section renders from until it's
+        # individually aimed at; `_sec_state` holds one independent envelope
+        # per section that's actually been edited (cleared on "select all").
+        self._global = _ConductState()
+        self._sec_state: dict[str, _ConductState] = {}
+        self._gen_style: str | None = None              # style of the barmodel's last prefetched line
         self.base_bpm = self.bpm                        # the song's own tempo (rubato pivots here)
         self._chords = bar_chords(self.song)
-        self._pad_voices: list[int] | None = None
-        self._pad_until = -1
         self._model = RemoteModel()                     # trained policy (WM_MODEL_URL); optional
         self._barmodel = RemoteBarModel()               # trained line writer (WM_BARMODEL_URL)
         self._decision: Decision | None = None          # the policy's active answer, until the next gesture
@@ -92,8 +110,11 @@ class Conductor:
         self.song = song
         self._tracks = tracks or []
         self._chords = bar_chords(song)         # harmony follows every song change
-        self._pad_voices = None                 # pad layer re-voices fresh
-        self._pad_until = -1
+        self._global.pad_voices = None          # pad layer re-voices fresh
+        self._global.pad_until = -1
+        for st in self._sec_state.values():
+            st.pad_voices = None
+            st.pad_until = -1
         if set_tempo:
             self.set_tempo(song.bpm)
         if reanchor:
@@ -122,6 +143,7 @@ class Conductor:
                     for b, bar in enumerate(self.song.bars) for (on, dur, pitch) in bar.melody]
             tracks = [{"name": "melody", "instrument": "synth", "is_drum": False,
                        "is_melody": True, "note_count": len(roll), "roll": roll}]
+        focus = self._target_state()
         return {
             "playing": self._playing,
             "bpm": round(self.bpm),
@@ -129,10 +151,10 @@ class Conductor:
             "last_choice": self._last_choice,
             "decision_source": self._last_source,
             "device": self._device,
-            "intensity": round(self._intensity, 3),
+            "intensity": round(focus.intensity, 3),
             "candidates": list(GENERATORS) + (["generated"] if self._barmodel.configured else []),
             "training_rows": self._datalog.rows,
-            "gesture": self._gesture.as_dict() if self._gesture else None,
+            "gesture": focus.gesture.as_dict() if focus.gesture else None,
             "song": self.song.name,
             "key_root": self.song.key_root,
             "bars": len(self.song.bars),
@@ -248,8 +270,24 @@ class Conductor:
         push; every real flick (demo button, wand presets) is ~0.3s."""
         return g is not None and g.energy > 0.65 and 0.0 < g.duration < 0.4
 
+    def _target_state(self) -> _ConductState:
+        """Read-only: whichever state the CURRENT aim is already using — its
+        own override if one has been created, else the shared global feed."""
+        if self._aim:
+            return self._sec_state.get(self._aim, self._global)
+        return self._global
+
+    def _target_state_for_push(self) -> _ConductState:
+        """Where a NEW gesture lands: creates the aimed section's own
+        independent envelope the first time it's actually edited, so aiming
+        without ever gesturing doesn't fork anything."""
+        if self._aim and any(s.section_id == self._aim for s in self._sections):
+            return self._sec_state.setdefault(self._aim, _ConductState())
+        return self._global
+
     def _gesture_in(self, features: GestureFeatures, t_end_ms: float) -> None:
-        self._gesture = features
+        state = self._target_state_for_push()
+        state.gesture = features
         # Push the conducting envelope: the gesture's vigor becomes the target
         # intensity the orchestra chases (and then relaxes from). Two shapes are
         # special: a stab is an ACCENT — the sting fires but the envelope stays
@@ -260,27 +298,39 @@ class Conductor:
             target = 0.6 * features.energy + 0.4 * features.size
             if features.rotation > 0.5:
                 target = max(target, 0.5 + 0.35 * features.rotation)
-            self._intensity_target = max(0.0, min(1.0, target))
-        log.info("gesture -> %s (intensity target %.2f)",
-                 {k: round(v, 2) for k, v in features.as_dict().items()}, self._intensity_target)
+            state.intensity_target = max(0.0, min(1.0, target))
+        log.info("gesture(%s) -> %s (intensity target %.2f)", self._aim or "all",
+                 {k: round(v, 2) for k, v in features.as_dict().items()}, state.intensity_target)
         # A SWELL (slow, sustained lift) arms a planned multi-bar arc: the next
         # bars ramp density + velocity and land on a climax crash. One decision,
         # deterministic execution — latency only gates when it starts, not how
         # long it lasts.
         if features.vertical > 0.6 and features.energy > 0.45 and features.duration > 0.8:
-            self._arc = self._arc_total
-            log.info("build arc armed: %d bars to climax", self._arc)
+            state.arc = self._arc_total
+            log.info("build arc armed: %d bars to climax", state.arc)
         self._decision = None                    # new intent — the model must re-decide
         self._model.request(self._context())
         self._queue_pickup(t_end_ms)
 
-    def _arc_step(self) -> tuple[float, float, bool]:
-        """Advance the build arc one bar: (vel_mult, density_floor, climax)."""
-        if self._arc <= 0:
-            return (1.0, 0.0, False)
-        p = 1.0 - (self._arc - 1) / self._arc_total   # 0.25 -> 0.5 -> 0.75 -> 1.0
-        self._arc -= 1
-        return (0.8 + 0.5 * p, min(1.0, 0.35 + 0.75 * p), p >= 1.0)
+    def _step_state(self, state: _ConductState) -> bool:
+        """Advance one state's build arc + conducting envelope by one bar:
+        chase the gesture's target while the target relaxes toward neutral.
+        Runs for EVERY active state each bar, not just the aimed one, so an
+        unaimed section keeps breathing back down on its own clock instead of
+        freezing at whatever it was doing when you last pointed elsewhere.
+        Returns True the one bar it fully relaxes back to neutral."""
+        if state.arc <= 0:
+            state.arc_now = (1.0, 0.0, False)
+        else:
+            p = 1.0 - (state.arc - 1) / self._arc_total   # 0.25 -> 0.5 -> 0.75 -> 1.0
+            state.arc -= 1
+            state.arc_now = (0.8 + 0.5 * p, min(1.0, 0.35 + 0.75 * p), p >= 1.0)
+        state.intensity += (state.intensity_target - state.intensity) * 0.5
+        state.intensity_target += (0.5 - state.intensity_target) * 0.18
+        if abs(state.intensity - 0.5) < 0.03 and state.gesture is not None:
+            state.gesture = None             # fully relaxed: the cue is over
+            return True
+        return False
 
     def on_grab(self, kind: str, server_ms: float) -> None:
         pass  # grab edges could cut sustains; not needed for the slice
@@ -289,15 +339,18 @@ class Conductor:
         """The room answers a gesture right away, on the next 8th-note. A sharp
         DRAMATIC motion (fast + short = a stab) gets a fortissimo two-octave
         chord sting with a crash; anything gentler gets a quick low-velocity
-        flourish. The full musical response still lands at the bar line."""
+        flourish. The full musical response still lands at the bar line, and
+        targets the same section the gesture itself was aimed at."""
         if not self._playing or not config.PICKUP:
             return
-        g = self._gesture
+        g = self._target_state().gesture
         sting = self._is_stab(g)
         eighth = self.bar_ms / 8
         bar_start = self._next_bar_start - self.bar_ms
         at = bar_start + math.ceil((t_end_ms + 60.0 - bar_start) / eighth) * eighth
         chord = self.song.bar(max(0, self._next_bar_idx - 1)).chord_pcs
+        self._pickup_section = (self._aim if self._aim
+                                and any(s.section_id == self._aim for s in self._sections) else None)
         if sting:
             stab = voice_triad(chord, base=52) + voice_triad(chord, base=64)
             self._pickup = [(at, eighth, m, 0.95, "pluck") for m in stab]
@@ -308,15 +361,12 @@ class Conductor:
                             for i, m in enumerate(voice_triad(chord, base=64))]
 
     def on_aim(self, section_id: str | None) -> None:
-        # Engaging solo cuts every OTHER phone's in-flight notes immediately —
-        # isolation is heard in ~one scheduler tick, not at the next bar line.
-        # Releasing solo lets the room come back on the beat (no cancels).
-        if (section_id and section_id != self._aim and self._playing
-                and any(s.section_id == section_id for s in self._sections)):
-            for s in self._sections:
-                if s.section_id != section_id:
-                    self._cancels.append(CancelSpec(section=s.section_id))
+        # Aiming is a pure edit-target selection now: every section keeps
+        # playing regardless of what's aimed. None ("select all") folds every
+        # individually-edited section back onto the shared global feed.
         self._aim = section_id
+        if section_id is None:
+            self._sec_state.clear()
 
     def on_feedback(self, value: int) -> None:
         self._datalog.feedback(value)
@@ -334,9 +384,10 @@ class Conductor:
             self._reanchor = False
         events: list[NoteEvent] = []
         if self._pickup:                         # instant gesture answer, once
+            sec = self._pickup_section or SECTION_ALL
             for (at, dur, midi, vel, art) in self._pickup:
                 if at >= now_ms + MIN_LEAD_MS:
-                    events.append(self._note(SECTION_ALL, at, dur, midi, vel, art))
+                    events.append(self._note(sec, at, dur, midi, vel, art))
             self._pickup = None
         while self._next_bar_start <= until_ms:
             if self._next_bar_start >= now_ms - self.bar_ms:
@@ -354,16 +405,17 @@ class Conductor:
         bar = self.song.bar(self._next_bar_idx if idx is None else idx)
         return build_context(key_root=self.song.key_root, bpm=self.bpm,
                              chord_root=bar.chord_root, chord_minor=bar.chord_minor,
-                             last_choice=self._last_choice, gesture=self._gesture)
+                             last_choice=self._last_choice, gesture=self._target_state().gesture)
 
     def _decide(self, idx: int, cands: dict) -> Decision:
         """Editor override > active model answer > heuristic — always instantly
         playable, so the network can only add intelligence, never stall a bar.
         Every (context, decision) pair becomes a logged training row."""
         ctx = self._context(idx)
+        g = self._target_state().gesture
         if self._forced and self._forced in cands:
             decision = Decision(candidate=self._forced,
-                                octave_shift=heuristic.octave_shift(self._gesture) // 12,
+                                octave_shift=heuristic.octave_shift(g) // 12,
                                 source="forced")
         else:
             fresh = self._model.take()
@@ -372,13 +424,13 @@ class Conductor:
             if self._decision is not None and self._decision.candidate in cands:
                 decision = self._decision
             else:
-                decision = heuristic_decision(self._gesture, self._last_choice, list(cands))
+                decision = heuristic_decision(g, self._last_choice, list(cands))
         self._last_choice = decision.candidate
         self._last_source = decision.source
         self._datalog.decision(bar=idx, song=self.song.name, context=ctx, decision=decision)
         return decision
 
-    def _arr_style(self) -> str:
+    def _arr_style(self, state: _ConductState) -> str:
         """The ear-approved device vocabulary, ranked by the conductor's own
         listening tests: harmonize and hush strongest, then arpeggio and
         passing. (Echo was cut — sounded out of place.) Any device that ADDS
@@ -386,10 +438,10 @@ class Conductor:
         lift-reachable zone: twist or the biggest wave = ENERGIZE (arpeggio),
         a firm push = GROUND (harmonize), the lightest push that still lifts =
         EMBELLISH (passing)."""
-        g = self._gesture
+        g = state.gesture
         # A build arc blooms chords by definition — the climax needs its
         # harmonic bed, not sparse ornaments, whatever gesture armed it.
-        if g is None or self._arc_now[1] > 0:
+        if g is None or state.arc_now[1] > 0:
             return "harmonize"
         if g.rotation > 0.5:
             return "arpeggio"
@@ -404,7 +456,10 @@ class Conductor:
         """Add the bar model's prefetched line (if one landed for this bar) and
         request TWO bars ahead — measured serving latency for a composed bar is
         ~4.6s, so the request needs two bars of playing time (~4.8s at 100 BPM)
-        to land. A faster serving host can drop this back to one."""
+        to land. A faster serving host can drop this back to one. The remote
+        writer serves ONE line per bar, so this stays tied to whatever's
+        currently targeted (aimed section, or the shared feed) rather than
+        forking per section."""
         taken = self._barmodel.take(idx)
         if taken:
             cands["generated"] = taken[0]
@@ -412,7 +467,8 @@ class Conductor:
         if self._barmodel.configured:
             ahead = config.BARMODEL_PREFETCH   # 2 absorbs slow serving; 1 on a fast host
             tgt, prev = self.song.bar(idx + ahead), self.song.bar(idx + ahead - 1)
-            style = self._arr_style() if self.song.parts else style_for(self._gesture)
+            tstate = self._target_state()
+            style = self._arr_style(tstate) if self.song.parts else style_for(tstate.gesture)
             # Never ask the deployed adapter for a style it wasn't trained on —
             # it would improvise something OFF-style and we'd play it under the
             # style's name. Out-of-list styles are deterministic (harmony.py).
@@ -426,17 +482,18 @@ class Conductor:
 
     # --- bar generation ---
     def _bar_events(self, idx: int, bar_start: float) -> list[NoteEvent]:
-        self._arc_now = self._arc_step()
-        # Advance the conducting envelope one bar: chase the gesture's target,
-        # while the target itself relaxes toward neutral. ~2 bars to arrive,
-        # ~6-8 bars to breathe back — phrasing, not a step function.
-        self._intensity += (self._intensity_target - self._intensity) * 0.5
-        self._intensity_target += (0.5 - self._intensity_target) * 0.18
-        if abs(self._intensity - 0.5) < 0.03 and self._gesture is not None:
-            self._gesture = None                 # fully relaxed: the cue is over
-            self._decision = None
-        # Rubato: the tempo leans with the conductor (±6% around the song's own).
-        self.bpm = self.base_bpm * (1 + (self._intensity - 0.5) * 0.12)
+        # Advance EVERY active envelope one bar (not just the aimed one) so an
+        # unaimed section keeps chasing its own target and relaxing back on
+        # its own clock instead of freezing wherever it last was.
+        relaxed = {id(self._global): self._step_state(self._global)}
+        for sid, st in self._sec_state.items():
+            relaxed[id(st)] = self._step_state(st)
+        tstate = self._target_state()
+        if relaxed.get(id(tstate)):
+            self._decision = None            # the currently-conducted cue just ended
+        # Rubato: the tempo leans with whatever's currently being conducted
+        # (±6% around the song's own) — one shared clock for every section.
+        self.bpm = self.base_bpm * (1 + (tstate.intensity - 0.5) * 0.12)
         self.bar_ms = 60_000.0 / self.bpm * 4
         self.s16_ms = self.bar_ms / 16
         if self.song.parts:                      # a loaded MIDI: play its arrangement
@@ -455,15 +512,10 @@ class Conductor:
 
         # Distribute parts so multiple phones are genuinely different instruments:
         #   2+ sections -> section[0] plays melody, the rest play the accompaniment
-        #                  (wand aim overrides: the aimed phone carries the line solo)
         #   1 section   -> it plays both
         #   0 sections  -> laptop (stage) plays everything via SECTION_ALL
         n = len(self._sections)
-        aim = self._aim if any(s.section_id == self._aim for s in self._sections) else None
-        if n >= 2 and aim:
-            melody_sec = next(s.section_id for s in self._sections if s.section_id != aim)
-            responder_secs = [aim]
-        elif n >= 2:
+        if n >= 2:
             melody_sec = self._sections[0].section_id
             responder_secs = [s.section_id for s in self._sections[1:]]
         elif n == 1:
@@ -473,7 +525,7 @@ class Conductor:
             melody_sec = SECTION_ALL
             responder_secs = [SECTION_ALL]
 
-        vel_mult, _floor, climax = self._arc_now
+        vel_mult, _floor, climax = tstate.arc_now
         for (on, dur, midi, vel) in responder:
             at, d, note = bar_start + on * self.s16_ms, dur * self.s16_ms, _clampmidi(midi + shift)
             for sec in responder_secs:
@@ -499,7 +551,7 @@ class Conductor:
         of notes that survive (the structurally strongest: long, loud,
         on-beat), `vel_scale` the dynamics, `shift` the register (never for
         drums). The build arc's floor/multiplier ride on top."""
-        arc_mult, arc_floor, _climax = self._arc_now
+        arc_mult, arc_floor, _climax = self._target_state().arc_now
         keep = max(keep, arc_floor)
         vel_scale *= arc_mult
         if keep <= 0.0 or not notes:
@@ -525,24 +577,49 @@ class Conductor:
             self._part_map = None
         log.info("part assignment: %s", mapping or "round-robin")
 
-    def _arrangement_events(self, idx: int, bar_start: float) -> list[NoteEvent]:
-        """The approved conducting vocabulary, and nothing else:
+    def _calc_for_state(self, state: _ConductState) -> dict:
+        """Turn one state's raw envelope into this bar's shaping numbers:
         neutral = the file verbatim; calm = HUSH (beat-grid simplification,
-        softer); lift = HARMONY (voice-led chord pads + cello root, re-struck
-        only on chord changes — the model's generated layer when one arrived,
-        the deterministic theory otherwise). Tempo rubato rides the envelope.
-        Part map routes parts; aiming SOLOS a phone; drums never transpose."""
-        i9 = self._intensity
-        calm = max(0.0, 0.5 - i9) * 2            # 0..1 below neutral
-        lift = max(0.0, i9 - 0.5) * 2            # 0..1 above neutral
-        arc_mult, arc_floor, _climax = self._arc_now
-        lift = max(lift, arc_floor)              # a build arc is a sustained push
+        softer); lift = HARMONY (voice-led chord pads + cello root). Computed
+        independently per state so an aimed section's push never bleeds its
+        density/dynamics into a section that's still coasting on the shared
+        feed (or on its own, separately-decaying, earlier edit)."""
+        i9 = state.intensity
+        calm = max(0.0, 0.5 - i9) * 2             # 0..1 below neutral
+        lift = max(0.0, i9 - 0.5) * 2             # 0..1 above neutral
+        arc_mult, arc_floor, climax = state.arc_now
+        lift = max(lift, arc_floor)               # a build arc is a sustained push
         neutral = calm < 0.06 and lift < 0.06 and not self._forced
         thin_level = 0 if calm < 0.2 else (1 if calm < 0.6 else 2)
         vel_scale = (1.0 - 0.45 * calm) * (1.0 + 0.35 * lift) * arc_mult
+        return {"i9": i9, "calm": calm, "lift": lift, "arc_mult": arc_mult,
+                "climax": climax, "neutral": neutral, "thin_level": thin_level,
+                "vel_scale": vel_scale}
 
+    def _arrangement_events(self, idx: int, bar_start: float) -> list[NoteEvent]:
+        """The approved conducting vocabulary, and nothing else — rendered per
+        section from ITS OWN state (an individually-aimed override, or the
+        shared global feed). Tempo rubato is the one exception: it's a single
+        transport-wide clock, so it rides whatever's currently targeted
+        (_bar_events). Part map routes parts; aiming targets edits at a phone,
+        nothing more (every part keeps sounding); drums never transpose."""
+        events: list[NoteEvent] = []
+        n = len(self._sections)
+        by_id = {s.section_id: s for s in self._sections}
+
+        state_by_sec = {s.section_id: self._sec_state.get(s.section_id, self._global)
+                        for s in self._sections}
+        global_calc = self._calc_for_state(self._global)
+        calc_by_state: dict[int, dict] = {id(self._global): global_calc}
+        for st in state_by_sec.values():
+            calc_by_state.setdefault(id(st), self._calc_for_state(st))
+
+        # The remote bar-writer serves ONE composed line per bar; fetch it if
+        # ANY active state wants shaping this bar (cheap deterministic theory
+        # generators run per-section below regardless of what it returns).
+        any_active = any(not c["neutral"] for c in calc_by_state.values())
         gen_line = None
-        if neutral:
+        if not any_active:
             self._last_choice = None
         else:
             bar, prev = self.song.bar(idx), self.song.bar(idx - 1)
@@ -551,10 +628,6 @@ class Conductor:
             gen_line = cands.get("generated")
             self._decide(idx, cands)             # the trained policy + training rows
 
-        events: list[NoteEvent] = []
-        n = len(self._sections)
-        by_id = {s.section_id: s for s in self._sections}
-        solo = self._aim if self._aim in by_id else None
         for i, part in enumerate(self.song.parts):
             # Routing priority: explicit LLM part map > instrument match (every
             # phone assigned this part's instrument plays it — that's how two
@@ -567,22 +640,20 @@ class Conductor:
             else:
                 matched = [s.section_id for s in self._sections if s.instrument == part.instrument]
                 secs = matched or [self._sections[i % n].section_id]
-            if solo:
-                secs = [s for s in secs if s == solo]
-                if not secs:
-                    continue                     # isolation: only the aimed phone sounds
             raw = part.bars[idx % len(part.bars)]
-            if neutral:
-                notes = raw
-            elif part.is_melody:
-                notes = [(on, dur, m, min(1.0, v * max(0.9, vel_scale)))
-                         for (on, dur, m, v) in raw]
-            else:
-                # Drums hush one level harder — a calm room drops toward the kick.
-                lvl = min(2, thin_level + 1) if (part.is_drum and thin_level) else thin_level
-                notes = [(on, dur, m, min(1.0, v * vel_scale))
-                         for (on, dur, m, v) in thin_grid(raw, lvl)]
             for sec in secs:
+                calc = global_calc if sec == SECTION_ALL else calc_by_state[id(state_by_sec[sec])]
+                neutral, thin_level, vel_scale = calc["neutral"], calc["thin_level"], calc["vel_scale"]
+                if neutral:
+                    notes = raw
+                elif part.is_melody:
+                    notes = [(on, dur, m, min(1.0, v * max(0.9, vel_scale)))
+                             for (on, dur, m, v) in raw]
+                else:
+                    # Drums hush one level harder — a calm room drops toward the kick.
+                    lvl = min(2, thin_level + 1) if (part.is_drum and thin_level) else thin_level
+                    notes = [(on, dur, m, min(1.0, v * vel_scale))
+                             for (on, dur, m, v) in thin_grid(raw, lvl)]
                 sinfo = by_id.get(sec)
                 if sinfo is not None and (sinfo.muted or sinfo.volume <= 0.001):
                     continue                     # per-phone mute/volume (console target panel)
@@ -595,16 +666,30 @@ class Conductor:
                                              dur * self.s16_ms, midi_out, max(0.12, vel * svol), art,
                                              inst=part.instrument))
 
-        # HARMONY on a push: the ear-ranked device for the gesture. The line is
-        # the trained model's when one landed FOR THIS STYLE, else the exact
-        # deterministic generator the model is trained on (engine/harmony.py) —
-        # so every device sounds NOW, model in or out, and sounds the same.
-        device = None
-        if lift > 0.2:
+        # HARMONY on a push: the ear-ranked device for the gesture. Rendered
+        # once per state GROUP (the shared feed's non-overridden sections
+        # together, plus each individually-aimed section on its own) so a
+        # push aimed at one phone doesn't paint an ornament onto every phone.
+        shared_secs = [s.section_id for s in self._sections if s.section_id not in self._sec_state]
+        dest_all = [SECTION_ALL] if n == 0 else shared_secs
+        groups: list[tuple[_ConductState, dict, list[str]]] = []
+        if dest_all:
+            groups.append((self._global, global_calc, dest_all))
+        for sid, st in self._sec_state.items():
+            if sid in by_id:
+                groups.append((st, calc_by_state[id(st)], [sid]))
+
+        device_by_state: dict[int, str | None] = {}
+        for state, calc, dests in groups:
+            lift = calc["lift"]
+            if lift <= 0.2:
+                state.pad_until = -1             # released: next push re-voices fresh
+                device_by_state[id(state)] = None
+                continue
             chord = self._chords[idx % len(self._chords)]
-            style = self._arr_style()
+            style = self._arr_style(state)
             line, src = None, None
-            if gen_line and getattr(self, "_gen_style", None) == style:
+            if gen_line and self._gen_style == style:
                 line, src = gen_line, "model"
             elif style == "arpeggio":
                 line, src = arpeggiate(self.song.bar(idx), self.song.bar(idx - 1),
@@ -617,6 +702,7 @@ class Conductor:
                 line = (passing_infill(b, self.song.bar(idx - 1), self.song.key_root)
                         + approach_run(b, self.song.bar(idx + 1), self.song.key_root))
                 src = "theory"
+            device = None
             if line and style != "harmonize":
                 mel_inst = next((p.instrument for p in self.song.parts if p.is_melody), "violin")
                 solo_piece = len([p for p in self.song.parts if not p.is_drum]) <= 1
@@ -625,53 +711,59 @@ class Conductor:
                 inst = mel_inst if (solo_piece or style == "passing") else "harp"
                 for (on, dur, midi, vel) in line[:16]:
                     art = "sustain" if dur >= 8 else "pluck"
-                    events.append(self._note(SECTION_ALL, bar_start + on * self.s16_ms,
-                                             dur * self.s16_ms, midi,
-                                             min(vel, 0.35 + 0.3 * lift), art, inst=inst))
-                self._pad_until = idx
+                    for dest in dests:
+                        events.append(self._note(dest, bar_start + on * self.s16_ms,
+                                                 dur * self.s16_ms, midi,
+                                                 min(vel, 0.35 + 0.3 * lift), art, inst=inst))
+                state.pad_until = idx
                 device = f"{style} · {src}"
             elif line and src == "model":
                 # Harmonize from the keeper model — the ear-approved live path,
                 # unchanged: its held voicing re-lands each bar.
                 for (on, dur, midi, vel) in line[:5]:
                     art = "sustain" if dur >= 8 else "pluck"
-                    events.append(self._note(SECTION_ALL, bar_start + on * self.s16_ms,
-                                             dur * self.s16_ms, midi,
-                                             min(vel, 0.35 + 0.3 * lift), art, inst="viola"))
-                self._pad_until = idx
+                    for dest in dests:
+                        events.append(self._note(dest, bar_start + on * self.s16_ms,
+                                                 dur * self.s16_ms, midi,
+                                                 min(vel, 0.35 + 0.3 * lift), art, inst="viola"))
+                state.pad_until = idx
                 device = "harmonize · model"
             else:
                 # Deterministic pads (harmonize with no model line, or an
                 # ornament with nothing to say this bar): held, voice-led
                 # chords, re-struck only when the harmony moves.
-                if idx > self._pad_until or self._chords[(idx - 1) % len(self._chords)] != chord:
+                if idx > state.pad_until or self._chords[(idx - 1) % len(self._chords)] != chord:
                     span = chord_span(self._chords, idx % len(self._chords))
-                    self._pad_voices = voice_lead(self._pad_voices, triad(*chord))
+                    state.pad_voices = voice_lead(state.pad_voices, triad(*chord))
                     dur_ms = span * self.bar_ms * 0.98
                     pad_vel = PAD_VEL * (0.5 + 0.5 * lift)
-                    for v in self._pad_voices:
-                        events.append(self._note(SECTION_ALL, bar_start, dur_ms, v,
-                                                 pad_vel, "sustain", inst="viola"))
-                    events.append(self._note(SECTION_ALL, bar_start, dur_ms, 36 + chord[0],
-                                             ROOT_VEL * (0.5 + 0.5 * lift), "sustain", inst="cello"))
-                    self._pad_until = idx + span - 1
+                    for v in state.pad_voices:
+                        for dest in dests:
+                            events.append(self._note(dest, bar_start, dur_ms, v,
+                                                     pad_vel, "sustain", inst="viola"))
+                    for dest in dests:
+                        events.append(self._note(dest, bar_start, dur_ms, 36 + chord[0],
+                                                 ROOT_VEL * (0.5 + 0.5 * lift), "sustain", inst="cello"))
+                    state.pad_until = idx + span - 1
                 device = ("harmonize · pad" if style == "harmonize"
                           else f"{style} · tacet (pad)")
-        else:
-            self._pad_until = -1                 # released: next push re-voices fresh
+            device_by_state[id(state)] = device
 
-        # The device readout the demo shows: what this bar ACTUALLY did.
-        if neutral:
+        # The device readout the demo shows: what's happening to whatever is
+        # CURRENTLY targeted (the aimed section's own state, or the shared one).
+        focus = self._target_state()
+        focus_calc = calc_by_state.get(id(focus)) or self._calc_for_state(focus)
+        if focus_calc["neutral"]:
             self._device = "verbatim"
-        elif calm >= lift:
+        elif focus_calc["calm"] >= focus_calc["lift"]:
             self._device = "hush"
-        elif device:
-            self._device = device
+        elif device_by_state.get(id(focus)):
+            self._device = device_by_state[id(focus)]
         else:
             self._device = "swelling"            # pushed, device engages next bar
         log.info("bar %d arrangement: i=%.2f %s (%d parts -> %d sections)%s",
-                 idx, i9, self._device,
-                 len(self.song.parts), n, f", solo={solo}" if solo else "")
+                 idx, focus_calc["i9"], self._device,
+                 len(self.song.parts), n, f", aim={self._aim}" if self._aim else "")
         return events
 
     def _note(self, section: str, at: float, dur: float, midi: int, vel: float, art: str,

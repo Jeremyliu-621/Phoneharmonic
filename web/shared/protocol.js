@@ -37,7 +37,7 @@ export const ENGINE_STATE = "engine.state";   // live accompaniment/gesture upda
 export const WAND_STATE = "wand.state";     // optional imu stream-health diagnostics for stage/admin
 export const WAND_CMD = "wand.cmd";       // server -> wand: reflect show state {playing, mode, aim, seq}
 export const ANNOUNCE = "announce";       // {text, audio_b64?, mime?}
-export const FX_TENSION = "fx.tension";   // {value: 0..1}
+export const FX_TENSION = "fx.tension";   // {value: 0..1, section?}  no section = everyone
 export const FX_EXPR = "fx.expr";         // {section, semis, gain}
 export const ERR = "err";
 

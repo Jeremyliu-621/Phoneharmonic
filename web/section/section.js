@@ -125,7 +125,10 @@ joinScreen.addEventListener("click", async () => {
   conn.on(P.SCHED_CANCEL, (m) => {   // global panic, or a targeted cut of MY notes (solo)
     if (m.allnotesoff || m.section === myId) synth.panic();
   });
-  conn.on(P.FX_TENSION, (m) => synth.setTension(m.value));
+  conn.on(P.FX_TENSION, (m) => {   // targeted phones filter; everyone else resets open
+    if (m.section === undefined || m.section === P.SECTION_ALL || m.section === myId) synth.setTension(m.value);
+    else synth.setTension(0);
+  });
   conn.on(P.FX_EXPR, (m) => {   // targeted phones warp; everyone else resets
     if (m.section === P.SECTION_ALL || m.section === myId) synth.setExpression(m.semis, m.gain);
     else synth.setExpression(0, 1);

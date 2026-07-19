@@ -6,6 +6,7 @@ ignored, so a gesture is exactly what happened between grab-start and grab-end.
 from __future__ import annotations
 
 import logging
+import math
 import os
 
 from engine_api import GestureWindow, MusicEngine
@@ -124,3 +125,52 @@ class WandAimer:
             if d < best_d:
                 best_sid, best_d = sid, d
         return best_sid if best_d <= self.LOCK_DEG else None
+
+
+class ShakeDetector:
+    """A deliberate SHAKE — fast, repeated high-g impulses — read off raw
+    accelerometer magnitude, distinct from the slow tilt/point motions that
+    drive aiming and DET-mode expression. |accel| pulses well above gravity
+    at each jerk of a shake regardless of which way it's swung (the vector
+    norm can't tell direction), so this counts rising-edge crossings above a
+    hard threshold rather than looking for alternating sign. Used as "select
+    all": since the hardware wand aims continuously from yaw (there's no
+    separate SELECT mode to gate it), a shake is the one gesture that's
+    unmistakably not a point, so App latches aim to None for a short window
+    after one fires."""
+
+    WINDOW_MS = 600.0        # how far back "recent" impulses are counted
+    HARD_MS2 = 14.0          # |accel| - gravity that counts as a forceful jerk
+    MIN_PEAKS = 4            # jerks within WINDOW_MS to call it a shake
+    COOLDOWN_MS = 1500.0     # refractory period so one shake doesn't retrigger
+
+    def __init__(self) -> None:
+        self._samples: list[tuple[float, float]] = []   # (tw, |accel|)
+        self._last_fire = float("-inf")
+
+    def on_frames(self, frames: list[list[float]]) -> bool:
+        """Feed the same IMU batch aiming saw; True the frame a shake fires."""
+        for f in frames:
+            if len(f) < 4:
+                continue
+            try:
+                tw, ax, ay, az = float(f[0]), float(f[1]), float(f[2]), float(f[3])
+            except (TypeError, ValueError):
+                continue
+            self._samples.append((tw, math.sqrt(ax * ax + ay * ay + az * az)))
+        if not self._samples:
+            return False
+        now = self._samples[-1][0]
+        cutoff = now - self.WINDOW_MS
+        self._samples = [s for s in self._samples if s[0] >= cutoff]
+        peaks, above = 0, False
+        for _, mag in self._samples:
+            hard = abs(mag - 9.8) > self.HARD_MS2
+            if hard and not above:
+                peaks += 1
+            above = hard
+        if peaks >= self.MIN_PEAKS and now - self._last_fire > self.COOLDOWN_MS:
+            self._last_fire = now
+            self._samples.clear()
+            return True
+        return False
