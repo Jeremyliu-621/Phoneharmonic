@@ -537,8 +537,15 @@ function nudgeTempo(d) {
 el("tdown").addEventListener("click", () => nudgeTempo(-4));
 el("tup").addEventListener("click", () => nudgeTempo(4));
 // One-click songs from songs/ — same message the demo page sends.
-document.querySelectorAll(".songbtn").forEach((b) =>
+document.querySelectorAll(".songbtn[data-song]").forEach((b) =>
   b.addEventListener("click", () => conn.send({ t: P.SONG_FILE, name: b.dataset.song })));
+// Aim recalibration: the IMU has no compass, yaw drifts over minutes. Point
+// the wand at the laptop, click, and the beam re-zeroes (wandio.recal).
+el("recal").addEventListener("click", () => {
+  conn.send({ t: P.WAND_RECAL, tw: Math.round(performance.now()) });
+  el("recal").textContent = "🎯 aim re-zeroed ✓";
+  setTimeout(() => { el("recal").textContent = "🎯 recalibrate — point at laptop, click"; }, 1500);
+});
 
 // camera hub — seamless: the camera wand is simply ON. The iframe loads at
 // boot (its page auto-starts the webcam; the browser's permission prompt is
