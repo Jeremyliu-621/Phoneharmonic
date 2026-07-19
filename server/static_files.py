@@ -32,7 +32,7 @@ def _text_response(status: int, reason: str, body: str) -> Response:
     )
 
 
-def _redirect(location: str) -> Response:
+def redirect_response(location: str) -> Response:
     """302 to the canonical URL. Serving a directory's index INLINE at a
     slash-less path would break every relative asset on the page (the browser
     resolves ./x.js against the wrong base), so redirect like a real server."""
@@ -48,7 +48,7 @@ def build_static_response(raw_path: str) -> Response:
     url_path = urllib.parse.urlparse(raw_path).path
     rel = urllib.parse.unquote(url_path).lstrip("/")
     if rel == "":
-        return _redirect("/console/")  # bare host -> the console (the app IS the landing)
+        return redirect_response("/console/")  # bare host -> the console (the app IS the landing)
 
     target = (WEB_DIR / rel).resolve()
 
@@ -57,7 +57,7 @@ def build_static_response(raw_path: str) -> Response:
     # the parent and 404 — a page full of dead buttons.
     if target.is_dir():
         if not url_path.endswith("/"):
-            return _redirect(url_path + "/")
+            return redirect_response(url_path + "/")
         target = (target / DIRECTORY_INDEX).resolve()
 
     # Traversal guard: target must live under WEB_DIR.

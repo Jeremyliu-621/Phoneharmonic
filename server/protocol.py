@@ -49,7 +49,7 @@ ENGINE_STATE = "engine.state"   # {last_choice, gesture, playing, bpm, song}  li
 WAND_STATE = "wand.state"
 WAND_CMD = "wand.cmd"           # {playing, mode:"ai"|"det", aim:section_id|null, seq}  -> wand: reflect show state on the board
 ANNOUNCE = "announce"           # {text, audio_b64?, mime?}  commentator line -> stage/admin
-FX_TENSION = "fx.tension"       # {value: 0..1}  proximity build-up -> sections + stage
+FX_TENSION = "fx.tension"       # {value: 0..1, section?}  proximity build-up (no section = everyone) or det-mode filter (section = aim) -> sections + stage
 FX_EXPR = "fx.expr"             # {section, semis, gain}  deterministic-mode expression warp
 ERR = "err"                     # {code, msg}
 

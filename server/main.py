@@ -52,10 +52,11 @@ from recording.recorder import GestureRecorder
 from scheduler import Scheduler
 from session import Section, SessionState, WandSlot
 from showlog import ShowLog
-from static_files import build_static_response
-from wandio import WandAimer, WandRouter
+from static_files import build_static_response, redirect_response
+from wandio import ShakeDetector, WandAimer, WandRouter
 
 PAD_CANDIDATES = list(GENERATORS)   # MPR121 pads 0-5 force these; pad up = auto
+SELECT_ALL_LATCH_MS = 1500.0        # shake holds aim at "all" this long before pointing resumes control
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)-6s %(levelname)-7s %(message)s")
 log = logging.getLogger("main")
@@ -100,6 +101,8 @@ class App:
         self.wand = WandRouter(self.engine, recorder=self.recorder)
         self.scheduler = Scheduler(self.engine, self.hub)
         self.aimer = WandAimer()
+        self.shake = ShakeDetector()
+        self._select_all_until = 0.0            # server-ms; aim forced to None until this passes
         self.strokes = StrokeTracker()          # live stroke intent for the panel
         self.showlog = ShowLog(DEFAULT_SESSION)
         self.announcer = Announcer(self._announce_line)
@@ -114,6 +117,7 @@ class App:
         self._last_tension_ms = 0.0
         self._last_expr = (0, 1.0)              # deterministic-mode (semis, gain) throttle
         self._last_expr_ms = 0.0
+        self.https_enabled = False
         self._vibe_task: asyncio.Task | None = None
 
     # --- session persistence + roster hygiene ---
@@ -214,8 +218,21 @@ class App:
     # --- static + WS routing ---
     def process_request(self, connection: ServerConnection, request):
         # Returning None lets the WebSocket handshake proceed; a Response serves HTTP.
-        if request.path.split("?", 1)[0].rstrip("/") in (WS_PATH, WS_PATH.rstrip("/")):
+        path = request.path.split("?", 1)[0]
+        if path.rstrip("/") in (WS_PATH, WS_PATH.rstrip("/")):
             return None
+        # Camera APIs are unavailable on a plain-http LAN origin. Once the TLS
+        # listener is configured, make the familiar :8080 console URL upgrade
+        # itself to the secure :8443 origin. Keep localhost on HTTP: browsers
+        # explicitly treat localhost as secure, and the section/ESP32 routes
+        # must remain reachable over plain HTTP.
+        host = request.headers.get("Host", "").rsplit(":", 1)[0].strip("[]").lower()
+        is_loopback = host in ("localhost", "127.0.0.1", "::1")
+        is_tls = connection.transport.get_extra_info("ssl_object") is not None
+        if self.https_enabled and not is_tls and not is_loopback \
+                and (path == "/" or path.startswith("/console")):
+            url_host = format_url_host(self.lan_ip)
+            return redirect_response(f"https://{url_host}:{HTTPS_PORT}{request.path}")
         if request.path == "/" or not request.path.startswith(WS_PATH):
             return build_static_response(request.path)
         return None
@@ -474,6 +491,12 @@ class App:
                 self.wand.reset()
                 log.info("wand slot adopted by %s", conn.client_id[:8])
                 await self._broadcast_roster()   # the UI must see the wand come alive
+                # The hello-time sync in `_bind_section` no-ops here (the slot wasn't
+                # adopted yet), so a fresh camera boots assuming `playing=true`/mode
+                # "AI" with nothing to correct it — a PALM sent while the show was
+                # actually already stopped gets silently swallowed by its own
+                # edge-detection guard. Tell it the truth now that it owns the slot.
+                await self._notify_wand()
             elif conn.client_id != self._wand_client:
                 return
 
@@ -507,7 +530,7 @@ class App:
                 # parameter never sticks after the wand stops controlling it.
                 await self.hub.broadcast({"t": P.FX_EXPR, "section": P.SECTION_ALL,
                                           "semis": 0, "gain": 1.0}, roles=("section", "stage"))
-                await self.hub.broadcast({"t": P.FX_TENSION, "value": 0.0},
+                await self.hub.broadcast({"t": P.FX_TENSION, "section": P.SECTION_ALL, "value": 0.0},
                                          roles=("section", "stage"))
                 self.showlog.record("wand.mode", mode=mode, param=self.session.wand.det_param)
                 log.info("wand mode -> %s (%s)", mode, self.session.wand.det_param)
@@ -585,7 +608,10 @@ class App:
                                 f"The set just ended after {m['events']} logged moments. "
                                 f"Its fingerprint hash is {m['head_hash'][:12]}. Send the crowd off.")
         elif cmd in ("rewind", "forward"):
-            self.engine.on_transport(cmd, None)
+            # A real timestamp (not None) lets the conductor reanchor the clock
+            # to the jump immediately instead of only moving the bar cursor and
+            # leaving playback to catch up on the next natural bar boundary.
+            self.engine.on_transport(cmd, server_time_ms())
         elif cmd == "allnotesoff":
             self.engine.on_transport("allnotesoff", None)
         elif cmd == "tempo":
@@ -715,9 +741,9 @@ class App:
         """Deterministic mode: pure COORDINATE control, no motion involved. The
         wand's tilt (gravity direction — an absolute coordinate, drift-free)
         maps to the selected parameter: pitch = scale-locked degrees (quantized,
-        can never sound wrong), volume = a gain sweep, filter = the room-wide
-        tension filter. Streamed to the aimed phone; every other phone reads
-        the section field and resets to neutral."""
+        can never sound wrong), volume = a gain sweep, filter = a tension
+        sweep. All three stream to the aimed phone only; every other phone
+        reads the section field and resets to neutral."""
         row = frames[-1] if frames else None
         if not row or len(row) < 3:
             return
@@ -732,8 +758,8 @@ class App:
             if ("filter", value) == self._last_expr or now - self._last_expr_ms < 100.0:
                 return
             self._last_expr, self._last_expr_ms = ("filter", value), now
-            await self.hub.broadcast({"t": P.FX_TENSION, "value": value},
-                                     roles=("section", "stage"))
+            await self.hub.broadcast({"t": P.FX_TENSION, "section": aim or P.SECTION_ALL,
+                                      "value": value}, roles=("section", "stage"))
             return
         if param == "volume":
             semis, gain = 0, round(0.3 + 0.9 * (tilt + 1) / 2, 3)
@@ -763,7 +789,17 @@ class App:
 
     async def _update_aim(self, frames: list) -> None:
         self.aimer.on_frames(frames)
-        aim = self.aimer.resolve(self._placements())
+        now = server_time_ms()
+        if self.shake.on_frames(frames):
+            # Shaking is unmistakably not a point: since the hardware wand aims
+            # continuously from yaw (no separate SELECT mode to gate it), the
+            # only way to explicitly select "all" is to latch aim to None for
+            # a beat — long enough to let go of the shake before pointing
+            # resumes control, short enough not to feel stuck.
+            self._select_all_until = now + SELECT_ALL_LATCH_MS
+            self.showlog.record("wand.shake")
+            log.info("wand shake -> select all")
+        aim = None if now < self._select_all_until else self.aimer.resolve(self._placements())
         stroke, live, stroke_new = self.strokes.push(frames)   # live intent for the panel
         if self.session.wand.mode == "det":
             await self._expression(frames, aim)
@@ -773,7 +809,6 @@ class App:
             # wand-sim) keep their window path — grabbing suppresses this.
             self.engine.on_stroke(stroke, live, server_time_ms())
             self.showlog.record("wand.stroke", stroke=stroke)
-        now = server_time_ms()
         if aim != self._last_aim:
             self._last_aim = aim
             self.engine.on_aim(aim)
@@ -961,6 +996,7 @@ def build_ssl_context() -> ssl.SSLContext | None:
 async def main() -> None:
     app = App()
     ssl_ctx = build_ssl_context()
+    app.https_enabled = ssl_ctx is not None
 
     log.info("LAN IP detected: %s", app.lan_ip)
     if _ip_score(app.lan_ip) <= 0:
@@ -970,6 +1006,8 @@ async def main() -> None:
     log.info("open on this laptop:  http://localhost:%d/", HTTP_PORT)
     url_host = format_url_host(app.lan_ip)
     log.info("console:      http://%s:%d/console/", url_host, HTTP_PORT)
+    if ssl_ctx is not None:
+        log.info("secure console: https://%s:%d/console/", url_host, HTTPS_PORT)
     log.info("section join: http://%s:%d/section/?s=%s", url_host, HTTP_PORT, DEFAULT_SESSION)
     asyncio.create_task(app.prune_loop())
     if not os.environ.get("WM_DISCOVERY_OFF"):
