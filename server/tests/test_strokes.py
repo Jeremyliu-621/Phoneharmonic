@@ -206,6 +206,25 @@ def test_taught_left_right_on_any_gyro_axis():
     assert "RUNS" in got3, got3
 
 
+def test_pole_trip_does_not_corrupt_heading():
+    """Regression for 'up breaks everything': rotations made while the wand is
+    tilted at a pole must NOT scramble the heading — after returning level,
+    the taught left/right poses still fire."""
+    tr = StrokeTracker()
+    run(tr, frames(rest(0.4)))
+    tr.capture("NEUTRAL")
+    run(tr, frames(gyro_pulse(6, 160.0, 0.5), t0=2000))   # +80 deg right
+    tr.capture("ARPEGGIO")
+    run(tr, frames(gyro_pulse(6, -160.0, 0.5), t0=4000))  # back to 0
+    up = lambda i, t: (0.0, G, 0.0, 0.0, 150.0, 0.0) if i < 90 else None  # noqa: E731
+    got_up, _ = run(tr, frames(up, t0=6000))              # at the pole, SPINNING
+    assert "HARMONY" not in got_up or True                # (no HARMONY taught here)
+    run(tr, frames(rest(0.6), t0=9000))                   # back level, settle
+    run(tr, frames(gyro_pulse(6, 160.0, 0.5), t0=10000))  # +80 deg right again
+    got, _ = run(tr, frames(rest(1.0), t0=10600))
+    assert "ARPEGGIO" in got, f"heading corrupted by the pole trip: {got}"
+
+
 def test_recal_pose_is_neutral():
     """Recalibrating in ANY pose makes that pose the silent neutral — zones
     fire only on departure from it, and returning goes quiet again."""

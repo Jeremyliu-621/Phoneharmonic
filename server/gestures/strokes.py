@@ -53,6 +53,8 @@ ROLL_SIGN = float(os.environ.get("WM_ROLL_SIGN", "1"))   # -1 if rolls read mirr
 LIFT_SIGN = float(os.environ.get("WM_LIFT_SIGN", "1"))   # -1 if raise/lower read swapped
 BASELINE_CALM_MS = 350.0  # first hold this calm = the auto-captured neutral
 POSE_MATCH_DEG = 32.0     # captured-template match radius (gravity+yaw combined)
+HEADING_FREEZE_DEG = 40.0  # tilted past this from neutral: heading stops integrating
+GRAVITY_ONLY_DEG = 45.0    # templates tilted past this from neutral match on gravity alone
 TILT_HOLD_MS = 600.0   # zone held that long (calmly) -> commits
 TILT_REFIRE_MS = 1400.0  # ...and re-commits while held, so a hush stays down
 TILT_CALM_RMS = 2.5    # poses read only while the wand is otherwise quiet
@@ -92,6 +94,7 @@ class StrokeTracker:
                                                # integrates to ~55 deg of phantom turn/min
         self._pitch0: float | None = None      # calibrated neutral pitch (deg)
         self._roll0 = 0.0                      # calibrated neutral roll (deg)
+        self._g0: list[float] | None = None    # neutral gravity (heading-freeze ref)
         self._base_calm_since: float | None = None
         self._poses: dict = getattr(self, "_poses", {})   # captured templates
                                                # survive reset (board reboot)
@@ -118,8 +121,10 @@ class StrokeTracker:
         self._yaw = 0.0
         if self._g is not None:
             self._pitch0, self._roll0 = self._angles()
+            self._g0 = list(self._g)
         else:
             self._pitch0 = None
+            self._g0 = None
         self._base_calm_since = None
 
     # ── captured-pose calibration: no axis/sign/mounting assumptions ─────────
@@ -144,20 +149,41 @@ class StrokeTracker:
     def get_poses(self) -> dict:
         return self._poses
 
+    @staticmethod
+    def _vec_angle(a, b) -> float:
+        """Angle in degrees between two 3-vectors."""
+        ma = math.sqrt(sum(x * x for x in a)) or 1.0
+        mb = math.sqrt(sum(x * x for x in b)) or 1.0
+        dot = max(-1.0, min(1.0, sum(x * y for x, y in zip(a, b)) / (ma * mb)))
+        return math.degrees(math.acos(dot))
+
+    def _tilt_from_neutral(self) -> float:
+        """How far (deg) current gravity is from the neutral reference."""
+        if self._g is None:
+            return 0.0
+        ref = (self._poses.get("NEUTRAL") or {}).get("g") or self._g0
+        if ref is None:
+            return 0.0
+        return self._vec_angle(self._g, ref)
+
     def _nearest_pose(self) -> str | None:
         """Nearest captured template within POSE_MATCH_DEG; None if neutral,
-        too far from everything, or fewer than 2 templates exist."""
+        too far from everything, or fewer than 2 templates exist. Templates
+        tilted far from neutral (UP/DOWN) match on GRAVITY ALONE — their 90-
+        degree separation needs no heading, and heading is frozen while
+        tilted anyway."""
         if len(self._poses) < 2 or "NEUTRAL" not in self._poses or self._g is None:
             return None
-        mag = math.sqrt(sum(x * x for x in self._g)) or 1.0
-        gu = [x / mag for x in self._g]
+        n_g = self._poses["NEUTRAL"]["g"]
         best, best_d = None, 1e9
         for name, t in self._poses.items():
-            dot = max(-1.0, min(1.0, sum(a * b for a, b in zip(gu, t["g"]))))
-            gangle = math.degrees(math.acos(dot))
-            gi = t.get("gi", (0.0, 0.0, 0.0))
-            headdiff = math.sqrt(sum((a - b) ** 2 for a, b in zip(self._gyro_int, gi)))
-            d = math.sqrt(gangle * gangle + (0.8 * headdiff) ** 2)
+            gangle = self._vec_angle(self._g, t["g"])
+            if self._vec_angle(t["g"], n_g) > GRAVITY_ONLY_DEG:
+                d = gangle                      # gravity-distinct pole: gravity is enough
+            else:
+                gi = t.get("gi", (0.0, 0.0, 0.0))
+                headdiff = math.sqrt(sum((a - b) ** 2 for a, b in zip(self._gyro_int, gi)))
+                d = math.sqrt(gangle * gangle + (0.8 * headdiff) ** 2)
             if d < best_d:
                 best, best_d = name, d
         if best_d > POSE_MATCH_DEG or best == "NEUTRAL":
@@ -214,9 +240,15 @@ class StrokeTracker:
         if la_mag < 0.6 and gyro_mag < 3.0:
             for k in range(3):
                 self._gyro_bias[k] += (float(f[4 + k]) - self._gyro_bias[k]) * 0.02
-        self._yaw += (yaw_rate - self._gyro_bias[YAW_AXIS - 4] * YAW_SIGN) * dt
-        for k in range(3):                       # per-axis integrals: no axis
-            self._gyro_int[k] += (float(f[4 + k]) - self._gyro_bias[k]) * dt
+        # Heading integrates ONLY while the wand is level-ish. Per-axis gyro
+        # integration is a fiction once the sensor tilts far from its neutral
+        # orientation (the axes trade places) — a trip to the up/down pole was
+        # scrambling the heading and killing every later match. Frozen while
+        # tilted, the heading survives the excursion untouched.
+        if self._tilt_from_neutral() <= HEADING_FREEZE_DEG:
+            self._yaw += (yaw_rate - self._gyro_bias[YAW_AXIS - 4] * YAW_SIGN) * dt
+            for k in range(3):                   # per-axis integrals: no axis
+                self._gyro_int[k] += (float(f[4 + k]) - self._gyro_bias[k]) * dt
         pitch, roll = self._angles()
         if self._pitch0 is None:                 # auto-baseline: first calm hold
             if la_mag < TILT_CALM_RMS:
@@ -224,6 +256,7 @@ class StrokeTracker:
                     self._base_calm_since = tw
                 elif tw - self._base_calm_since >= BASELINE_CALM_MS:
                     self._pitch0, self._roll0 = pitch, roll
+                    self._g0 = list(self._g)
             else:
                 self._base_calm_since = None
         zone: str | None = None

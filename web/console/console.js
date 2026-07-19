@@ -131,6 +131,28 @@ function sendPlace(g) {
   for (const m of g.members) conn.send({ t: P.STAGE_PLACE, section_id: m.id, px: g.px, py: g.py });
 }
 
+// ── SOLO: double-tap a card = hear only that instrument (mutes the others via
+// the per-section mute the engine already honours for parts AND device lines).
+// Double-tap again (or double-tap another card) to release/switch.
+let soloKey = null;
+function applySolo() {
+  for (const g of groups) {
+    const mute = soloKey !== null && g.key !== soloKey;
+    for (const m of g.members) {
+      conn.send({ t: P.ADMIN_CMD, cmd: "mute", args: { section_id: m.id, muted: mute } });
+    }
+    const node = cardEls.get(g.key);
+    if (node) {
+      node.classList.toggle("solo", soloKey === g.key);
+      node.classList.toggle("dimmed", mute);
+    }
+  }
+}
+function toggleSolo(key) {
+  soloKey = soloKey === key ? null : key;
+  applySolo();
+}
+
 // ── render: cards + links ────────────────────────────────────────────────────
 function upsertCards() {
   for (const [key, node] of cardEls) {
@@ -146,6 +168,7 @@ function upsertCards() {
       el("room").appendChild(node);
       cardEls.set(g.key, node);
       attachDrag(node, g.key);
+      node.addEventListener("dblclick", (e) => { e.preventDefault(); toggleSolo(g.key); });
     }
     node.style.setProperty("--c", colorOf(g.instrument));
     node.querySelector("img").src = artistFor(g.instrument);   // the performer, not an icon
@@ -272,6 +295,10 @@ function renderRoster(m) {
   // keep aim in sync if the aimed group vanished
   if (aimedGroup && !groups.some((g) => g.key === aimedGroup)) aimedGroup = null;
   upsertCards();
+  if (soloKey) {
+    if (!groups.some((g) => g.key === soloKey)) { soloKey = null; }
+    applySolo();               // late joiners inherit the solo's mutes
+  }
   el("roomhint").hidden = sections.length === 0;
   applyEngine(m.engine);
 }
