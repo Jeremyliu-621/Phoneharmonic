@@ -36,3 +36,4 @@ Thumbs.db
 songs/
 server/data/last_song.*
 scratchpad/
+server/data/wand_poses.json
