@@ -12,7 +12,12 @@
 //
 // Runs on the laptop (getUserMedia needs a secure context — localhost qualifies).
 
-import { HandLandmarker, FilesetResolver }
+// GestureRecognizer, not HandLandmarker (ported from cv_hand_movements/): one
+// pass returns landmarks + HANDEDNESS + trained gesture labels — Open_Palm and
+// Closed_Fist come from MediaPipe's model instead of hand-rolled finger
+// geometry, and handedness lets us track ONLY the physical left hand, so the
+// wand-waving right hand can never fire transport.
+import { GestureRecognizer, FilesetResolver }
   from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
 import { Conn } from "../shared/ws.js";
 import { effectLabel } from "../shared/vocab.js";
@@ -20,7 +25,7 @@ import * as P from "../shared/protocol.js";
 
 const MP_VER = "0.10.14";
 const WASM = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VER}/wasm`;
-const MODEL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+const MODEL = "https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task";
 
 // MediaPipe hand landmark indices.
 const WRIST = 0, THUMB_TIP = 4, INDEX_MCP = 5, INDEX_TIP = 8, MIDDLE_MCP = 9, PINKY_MCP = 17;
@@ -110,11 +115,21 @@ async function boot() {
 
     el("loading").textContent = "waking the hand tracker…";
     const fileset = await FilesetResolver.forVisionTasks(WASM);
-    landmarker = await HandLandmarker.createFromOptions(fileset, {
+    const OPTS = {
       baseOptions: { modelAssetPath: MODEL, delegate: "GPU" },
       runningMode: "VIDEO",
-      numHands: 1,
-    });
+      numHands: 2,      // find the LEFT hand even when the wand hand is in frame
+      minHandDetectionConfidence: 0.5,
+      minHandPresenceConfidence: 0.5,
+      minTrackingConfidence: 0.5,
+    };
+    try {
+      landmarker = await GestureRecognizer.createFromOptions(fileset, OPTS);
+    } catch (err) {
+      console.warn("[cvwand] GPU delegate failed, retrying on CPU", err);
+      OPTS.baseOptions.delegate = "CPU";
+      landmarker = await GestureRecognizer.createFromOptions(fileset, OPTS);
+    }
     el("loading").hidden = true;
 
     // one short hint, then the hand speaks for itself
@@ -175,12 +190,30 @@ function connect() {
 function send(obj) { if (conn) conn.send(obj); }
 
 // --- per-frame loop ---
+// One inference per NEW camera frame (requestVideoFrameCallback where the
+// browser supports it), timestamps kept monotonic for recognizeForVideo, and
+// ONLY the physical left hand is tracked — MediaPipe's handedness stays
+// "Left" for the physical left hand in a mirrored selfie preview (verified in
+// the cv_hand_movements prototype), so the wand hand is invisible to us.
+let lastTs = -1;
+let builtinGesture = null;      // MediaPipe's trained label for the left hand
 function loop(now) {
   if (!running) return;
   let landmarks = null;
+  builtinGesture = null;
   try {
-    const res = landmarker.detectForVideo(video, now);
-    if (res.landmarks && res.landmarks.length) landmarks = res.landmarks[0];
+    const ts = Math.max(now, lastTs + 1);
+    lastTs = ts;
+    const res = landmarker.recognizeForVideo(video, ts);
+    let best = -1;
+    for (let i = 0; i < (res.landmarks?.length ?? 0); i++) {
+      const h = res.handednesses?.[i]?.[0];
+      if (h && h.categoryName === "Left" && h.score > best) {
+        best = h.score;
+        landmarks = res.landmarks[i];
+        builtinGesture = res.gestures?.[i]?.[0] ?? null;
+      }
+    }
   } catch (e) { /* transient frames before video is ready */ }
 
   if (landmarks) processHand(landmarks, now);
@@ -193,7 +226,11 @@ function loop(now) {
   }
 
   draw(landmarks);
-  requestAnimationFrame(loop);
+  if (typeof video.requestVideoFrameCallback === "function") {
+    video.requestVideoFrameCallback((t) => loop(t));
+  } else {
+    requestAnimationFrame(loop);
+  }
 }
 
 function processHand(lm, now) {
@@ -245,25 +282,18 @@ function processHand(lm, now) {
 
 // One discrete gesture per frame, from the closed cv.state vocabulary.
 function classify(lm, pinchRatio) {
-  const ext = (t2, p2) => dist(lm[t2], lm[WRIST]) > dist(lm[p2], lm[WRIST]) * 1.15;
-  const f = [ext(INDEX_TIP, INDEX_PIP), ext(MIDDLE_TIP, MIDDLE_PIP),
-             ext(RING_TIP, RING_PIP), ext(PINKY_TIP, PINKY_PIP)];
-  const n = f.filter(Boolean).length;
-  // A closed fist's thumb naturally rests near/over the curled fingers, which
-  // reads as a loose thumb-index pinch — that swallow was the real bug: FIST
-  // silently became PINCH, so pause never committed and closing your hand
-  // instead spammed the non-AI scrub path (rewind). But a deliberate pinch with
-  // the rest of the hand also relaxed/curled (how most people actually pinch)
-  // reads as n===0 too, so a flat "n===0 wins" rule swallows pinch the other
-  // way. When every finger curls, use the tighter GRAB_ON_TIGHT threshold to
-  // tell them apart: a real pinch is an actual touch, a fist's incidental
-  // thumb proximity is close but rarely that tight.
-  if (n === 0) return pinchRatio < GRAB_ON_TIGHT ? "PINCH" : "FIST";
+  // MediaPipe's TRAINED gesture model decides PALM/FIST (ported from
+  // cv_hand_movements/): far more robust than finger-count geometry across
+  // lighting, angles, and hand shapes. PINCH keeps priority via the tight
+  // threshold — a deliberate thumb-index touch beats a fist's incidental
+  // thumb proximity, which is close but rarely that tight.
+  if (pinchRatio < GRAB_ON_TIGHT) return "PINCH";
+  const b = builtinGesture;
+  if (b && b.score >= 0.5) {
+    if (b.categoryName === "Closed_Fist") return "FIST";
+    if (b.categoryName === "Open_Palm") return "PALM";
+  }
   if (pinchRatio < GRAB_ON) return "PINCH";
-  if (n === 4) return "PALM";
-  if (f[0] && n === 1) return "ONE_FINGER";
-  if (f[0] && f[1] && n === 2) return "TWO_FINGERS";
-  if (f[0] && f[1] && f[2] && n === 3) return "THREE_FINGERS";
   return null;
 }
 
