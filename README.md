@@ -122,13 +122,16 @@ semantics. The phone streams `wand.imu` in the exact format the firmware will â€
 it's the hardware stand-in. The webcam streams `wand.pose` (position, not IMU);
 the P3 gesture extractor consumes either through a common trajectory model.
 
-## HTTPS for the phone wand
+## HTTPS for the phone wand and LAN camera console
 
-Phones only expose motion sensors on a secure origin. A **self-signed cert is
-already generated** in `certs/` for LAN IP `192.168.18.8` â€” the server serves
-`:8443` automatically when it's present. On the phone, open
-`https://<lan-ip>:8443/wandsim/`, tap through the one-time "not private"
-warning (expected for self-signed), then "Enable motion".
+Phones only expose motion sensors on a secure origin, and browsers apply the
+same rule to the camera when the console is opened through a LAN IP. A local
+certificate in `certs/` makes the server serve `:8443` automatically. Opening
+`http://<lan-ip>:8080/console/` then redirects to the secure console. Trust the
+development certificate on any device that needs camera or motion access (on
+macOS, import `certs/cert.pem` into Keychain Access and set it to **Always
+Trust**). On a phone, open `https://<lan-ip>:8443/wandsim/`, accept or trust the
+development certificate, then "Enable motion".
 
 **If your LAN IP changed** (different network), regenerate the cert:
 
