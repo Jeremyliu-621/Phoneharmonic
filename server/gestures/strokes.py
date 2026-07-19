@@ -87,6 +87,9 @@ class StrokeTracker:
         self._yaw = 0.0                        # integrated yaw for LEFT/RIGHT zones
         self._gyro_int = [0.0, 0.0, 0.0]       # ALL-axis rotation integrals (deg):
                                                # mounting-agnostic heading for taught poses
+        self._gyro_bias = [0.0, 0.0, 0.0]      # learned at-rest bias (deg/s): the real
+                                               # wand reads ~1 deg/s while STILL, which
+                                               # integrates to ~55 deg of phantom turn/min
         self._pitch0: float | None = None      # calibrated neutral pitch (deg)
         self._roll0 = 0.0                      # calibrated neutral roll (deg)
         self._base_calm_since: float | None = None
@@ -205,9 +208,15 @@ class StrokeTracker:
         # calm hold) fires nothing; zones are departures from that pose, held
         # calmly ~0.6s. A held zone RE-commits, so "pointed at the floor"
         # keeps the room hushed. Switching zones restarts the hold clock.
-        self._yaw += yaw_rate * dt
-        for k in range(3):                       # raw per-axis integrals: no axis
-            self._gyro_int[k] += float(f[4 + k]) * dt   # or sign assumptions at all
+        # Gyro-bias learning: a still wand's gyro reading IS its bias — EMA it
+        # while quiet, subtract it from every integration. Measured on the real
+        # board: ~1 deg/s at rest = ~55 deg/min of phantom rotation without this.
+        if la_mag < 0.6 and gyro_mag < 3.0:
+            for k in range(3):
+                self._gyro_bias[k] += (float(f[4 + k]) - self._gyro_bias[k]) * 0.02
+        self._yaw += (yaw_rate - self._gyro_bias[YAW_AXIS - 4] * YAW_SIGN) * dt
+        for k in range(3):                       # per-axis integrals: no axis
+            self._gyro_int[k] += (float(f[4 + k]) - self._gyro_bias[k]) * dt
         pitch, roll = self._angles()
         if self._pitch0 is None:                 # auto-baseline: first calm hold
             if la_mag < TILT_CALM_RMS:

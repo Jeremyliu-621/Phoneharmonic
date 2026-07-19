@@ -42,7 +42,6 @@ from config import (
     SONG_CACHE,
     WS_PATH,
 )
-from engine.candidates import GENERATORS
 from engine.conductor import Conductor
 from gestures.strokes import LIFT_SIGN, StrokeTracker
 from hub import ClientConn, Hub, send_json
@@ -55,7 +54,6 @@ from showlog import ShowLog
 from static_files import build_static_response, redirect_response
 from wandio import ShakeDetector, WandAimer, WandRouter
 
-PAD_CANDIDATES = list(GENERATORS)   # MPR121 pads 0-5 force these; pad up = auto
 SELECT_ALL_LATCH_MS = 1500.0        # shake holds aim at "all" this long before pointing resumes control
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)-6s %(levelname)-7s %(message)s")
@@ -884,15 +882,17 @@ class App:
                                   "imu": self.imu_telemetry.snapshot()},
                                  roles=("stage", "admin"))
 
+    # MPR121 pads = the DETERMINISTIC device triggers: physical buttons, no
+    # sensor physics anywhere. Press = the device fires at the next bar; the
+    # envelope breathes back on its own (pad up needs no action).
+    PAD_DEVICES = ("HARMONY", "HUSH", "RUNS", "ARPEGGIO")
+
     async def _wand_touch(self, pad: int, state: str) -> None:
-        if state == "down" and 0 <= pad < len(PAD_CANDIDATES):
-            self.engine.set_forced(PAD_CANDIDATES[pad])
-            self.showlog.record("wand.touch", pad=pad, forced=PAD_CANDIDATES[pad])
-        elif state == "up":
-            self.engine.set_forced(None)
-        else:
-            return  # pads >= len(PAD_CANDIDATES) are reserved for hardware-side modes
-        await self._broadcast_roster()
+        if state == "down" and 0 <= pad < len(self.PAD_DEVICES):
+            device = self.PAD_DEVICES[pad]
+            self.engine.on_stroke(device, {}, server_time_ms())
+            self.showlog.record("wand.touch", pad=pad, device=device)
+            await self._broadcast_roster()
 
     async def _wand_range(self, mm: float) -> None:
         if mm < 0:

@@ -99,15 +99,14 @@ async def run(shows_dir: str) -> int:
     assert ann and ann["text"] == ANNOUNCE_TEXT, f"got {ann}"
     print(f"    announce: {ann['text']!r}")
 
-    print("[2] MPR121 pad forces / releases a candidate")
+    print("[2] MPR121 pad = deterministic device button (pad 0 -> HARMONY)")
     wand, _ = await ws("wand")
-    await wand.send(json.dumps({"t": "wand.touch", "pad": 4, "state": "down"}))
-    r = await recv_until(stage, "roster", pred=lambda m: m["engine"]["forced"] == "rhythmic_dense")
-    assert r, "pad 4 did not force rhythmic_dense"
-    await wand.send(json.dumps({"t": "wand.touch", "pad": 4, "state": "up"}))
-    r = await recv_until(stage, "roster", pred=lambda m: m["engine"]["forced"] == "auto")
-    assert r, "pad release did not return to auto"
-    print("    pad 4 -> rhythmic_dense -> auto ✓")
+    await wand.send(json.dumps({"t": "wand.touch", "pad": 0, "state": "down"}))
+    r = await recv_until(stage, "engine.state", timeout=8.0,
+                         pred=lambda m: (m.get("intensity") or 0.5) > 0.55)
+    assert r, "pad 0 did not push the harmony envelope"
+    await wand.send(json.dumps({"t": "wand.touch", "pad": 0, "state": "up"}))  # no-op, no crash
+    print(f"    pad 0 -> envelope {r['intensity']} (harmony rising) ✓")
 
     print("[3] ToF distance -> fx.tension (DET mode only — AI mode must stay clean)")
     await wand.send(json.dumps({"t": "wand.range", "mm": 150}))
