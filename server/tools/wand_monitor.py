@@ -11,6 +11,7 @@ import argparse
 import asyncio
 import json
 import math
+import pathlib
 import statistics
 import sys
 import threading
@@ -20,7 +21,14 @@ from dataclasses import dataclass
 import websockets
 from websockets.asyncio.client import connect
 
-from network_address import websocket_url
+# This file is invoked directly by the deployment launcher from the repository
+# root. Python otherwise puts server/tools (not server/) on sys.path, so sibling
+# server modules such as network_address aren't importable.
+SERVER_DIR = pathlib.Path(__file__).resolve().parents[1]
+if str(SERVER_DIR) not in sys.path:
+    sys.path.insert(0, str(SERVER_DIR))
+
+from network_address import websocket_url  # noqa: E402
 
 
 @dataclass(frozen=True)
