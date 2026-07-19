@@ -31,6 +31,11 @@ SONG_HUM = "song.hum"           # {frames:[[t_ms, midi_float, rms], ...]}  humme
 SONG_FILE = "song.file"         # {name}  load songs/<name>.mid from the server's disk
 CLOCK_REPORT = "clock.report"   # {theta, rtt}  section's own sync estimate (debug/health readout)
 CV_STATE = "cv.state"           # {gesture|null, mode, confidence}  debounced webcam recognizer state
+CV_EXPR = "cv.expr"             # {state:"start"|"move"|"end", frames:[[tw, xm, y], ...]}
+                                # The camera's LEFT-HAND MIXER: pinch-drag streams these while the
+                                # pinch is held. Deliberately NOT a wand.* message — the camera is
+                                # barred from those (it must never conduct, aim, or flip modes), but
+                                # volume/tempo are the mixer's job, not the wand's.
 
 # Closed vocabularies for CV_STATE. Keeping these server-side prevents arbitrary
 # client strings (including control characters) from being written to the log.
