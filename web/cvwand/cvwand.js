@@ -303,11 +303,11 @@ function classify(lm, pinchRatio) {
     if (b.categoryName === "Closed_Fist") return "FIST";
     if (b.categoryName === "Open_Palm") return "PALM";
     // Demo hand-signs for the four devices — trained labels only, so they
-    // hold up under stage lighting: 👍 harmony · 👎 hush · ✌️ runs · 🤟 arpeggio
+    // hold up under stage lighting: 👍 harmony · 👎 hush · ✌️ arpeggio · ☝️ runs
     if (b.categoryName === "Thumb_Up") return "THUMB_UP";
     if (b.categoryName === "Thumb_Down") return "THUMB_DOWN";
     if (b.categoryName === "Victory") return "VICTORY";
-    if (b.categoryName === "ILoveYou") return "ROCK";
+    if (b.categoryName === "Pointing_Up") return "POINT_UP";
   }
   if (pinchRatio < GRAB_ON) return "PINCH";
   return null;
@@ -362,8 +362,8 @@ const DEVICE_HOLD_MS = 900;   // device signs commit a touch faster than transpo
 const SIGN_DEVICE = {
   THUMB_UP: ["HARMONY", "👍 harmony"],
   THUMB_DOWN: ["HUSH", "👎 hush"],
-  VICTORY: ["RUNS", "✌️ runs"],
-  ROCK: ["ARPEGGIO", "🤟 arpeggio"],
+  VICTORY: ["ARPEGGIO", "✌️ arpeggio"],
+  POINT_UP: ["RUNS", "☝️ runs"],
 };
 let holdSince = 0, holdFired = false;
 
