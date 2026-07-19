@@ -60,15 +60,19 @@ SELECT_ALL_LATCH_MS = 1500.0        # shake holds aim at "all" this long before 
 # tilt-driven expression. Vertical fingertip position is a volume fader and
 # horizontal hand SPEED is a tempo dial, both applied to every instrument.
 # Normalized camera coords: xm/y span [0,1] across the frame.
-CV_SPEED_WINDOW_MS = 250.0    # rolling window the tempo speed is measured over
-CV_TEMPO_DEADZONE = 0.05      # units/s below this holds tempo — a pure vertical
-                              # (volume-only) drag must not also drag tempo down
-CV_TEMPO_REF_SLOW = 0.10      # units/s: a slow deliberate drift -> tempo floor
-CV_TEMPO_REF_FAST = 2.5       # units/s: a brisk swipe across ~half the frame -> ceiling
-CV_TEMPO_MULT_MIN = 0.7       # -> bpm at DET entry * 0.7
-CV_TEMPO_MULT_MAX = 1.4       # -> bpm at DET entry * 1.4
-CV_GAIN_THROTTLE_MS = 100.0   # matches the hw wand's _expression() precedent
-CV_TEMPO_THROTTLE_MS = 150.0  # longer: velocity-derived, wants the extra debounce
+CV_SPEED_WINDOW_MS = 180.0    # rolling window the tempo speed is measured over —
+                              # long enough to smooth tracking jitter, short
+                              # enough that the beat follows the hand
+# Tempo tracks the hand's CURRENT horizontal speed, continuously, like a beat
+# pattern: keep moving and it holds, slow down and it slows, stop and it settles
+# at the floor. Deliberately no dead zone — "I stopped and it stayed fast" is the
+# one thing a conductor's hand must never do.
+CV_TEMPO_REF_SLOW = 0.05      # units/s (frame widths): a near-still hand -> floor
+CV_TEMPO_REF_FAST = 1.5       # units/s: a brisk beat -> ceiling
+CV_TEMPO_MULT_MIN = 0.6       # -> the song's own tempo * 0.6
+CV_TEMPO_MULT_MAX = 1.6       # -> the song's own tempo * 1.6
+CV_GAIN_THROTTLE_MS = 60.0    # the fader should feel continuous under the hand
+CV_TEMPO_THROTTLE_MS = 80.0   # velocity-derived, but still wants to feel live
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)-6s %(levelname)-7s %(message)s")
 log = logging.getLogger("main")
@@ -136,7 +140,7 @@ class App:
         self._cv_pinching = False
         self._cv_speed_buf: list[tuple[float, float]] = []   # rolling (tw, xm)
         self._cv_last_speed = 0.0               # held across frames with too small a dt
-        self._cv_tempo_ref_bpm = self.engine.base_bpm        # re-anchored on DET entry
+        self._cv_tempo_ref_bpm = self.engine.base_bpm        # re-anchored on each pinch
         self._cv_last_gain, self._cv_last_gain_ms = 1.0, 0.0
         self._cv_last_bpm, self._cv_last_bpm_ms = self.engine.base_bpm, 0.0
         self.https_enabled = False
@@ -522,6 +526,17 @@ class App:
                                             P.WAND_IMU, P.WAND_GESTURE):
             return
 
+        # ...but the camera IS the mixing desk. Pinch-drag rides volume/tempo
+        # across every instrument. That's the left hand's job, not the wand's,
+        # so it rides its own message and never touches aim, modes or candidates.
+        if t == P.CV_EXPR and conn.role == "wand-cv":
+            state = msg.get("state", "")
+            if state in ("start", "end"):
+                self._cv_on_grab("start" if state == "start" else "end")
+            if state in ("start", "move") and self._cv_pinching:
+                await self._cv_expression(msg.get("frames") or [], conn.client_id)
+            return
+
         # Show control: only the stage/editor may drive the show — the join QR
         # is public, so audience phones must not be able to stop or hijack it.
         if (t in (P.ADMIN_CMD, P.SONG_LOAD, P.SONG_HUM, P.SONG_FILE,
@@ -569,13 +584,7 @@ class App:
             await self._update_aim(frames)
             return
         if t == P.WAND_POSE:
-            frames = msg.get("frames", [])
-            self.wand.on_pose(frames)
-            # det + cv: the same pose stream is a live volume/tempo controller
-            # while pinched (the camera's stand-in for the hw wand's tilt).
-            if (self.session.wand.mode == "det" and self.session.wand.variant == "cv"
-                    and self._cv_pinching):
-                await self._cv_expression(frames)
+            self.wand.on_pose(msg.get("frames", []))
             return
         if t == P.WAND_GRAB:
             # Grab windows are the SIMULATOR page's mechanism only now. The
@@ -586,10 +595,8 @@ class App:
             # vocabulary is poses + pads; its grabs are ignored.
             if conn.role == "wand-sim" and self.session.wand.mode != "det":
                 self.wand.on_grab(msg.get("state", ""), server_time_ms())
-            elif self.session.wand.variant == "cv":
-                self._cv_on_grab(msg.get("state", ""))
-            # det + hw/sim: still a no-op — those aim/express continuously off
-            # wand.imu tilt and have no grab concept at all.
+            # hw: still a no-op — it aims/expresses continuously off wand.imu
+            # tilt and has no grab concept at all. cv never reaches here.
             return
         if t == P.WAND_MODE:                    # physical toggle: ai composes / det controls
             mode = "det" if msg.get("mode") == "det" else "ai"
@@ -872,26 +879,32 @@ class App:
                                   "semis": semis, "gain": gain}, roles=("section", "stage"))
 
     def _cv_on_grab(self, kind: str) -> None:
-        """Pinch edges from the CV wand in DET mode. The pinch is the window:
+        """Pinch edges from the camera's mixer. The pinch is the window:
         expression only tracks the hand while it's held closed."""
         if kind == "start":
             self._cv_pinching = True
             # Drop samples from before the release — diffing across that gap
             # would read as one enormous jump in speed.
             self._cv_speed_buf = []
+            # Anchor to the SONG's own tempo, never to the live one. set_tempo()
+            # writes base_bpm, so anchoring there made each pinch pivot on what
+            # the last pinch left: end slow at 70 and the next pinch's range
+            # became 49-98, then 34-68... it ratcheted downward and stuck near
+            # the floor. The song's tempo is the one fixed point that can't drift.
+            self._cv_tempo_ref_bpm = self.engine.song.bpm
         elif kind == "end":
             self._cv_pinching = False
             # Gain/tempo deliberately keep their last commanded value: letting
             # go freezes what you dialled in, it doesn't snap back to neutral.
 
-    async def _cv_expression(self, frames: list) -> None:
-        """DET mode, CV wand, pinch held: the hand is a two-axis controller.
+    async def _cv_expression(self, frames: list, client_id: str | None = None) -> None:
+        """The camera's mixer, pinch held: the hand is a two-axis controller.
         Vertical fingertip position is an absolute volume fader (top = loud);
         horizontal SPEED is an absolute tempo dial (fast = quicker, slow =
         slower) measured over a short rolling window, since frame-to-frame
         deltas at this cadence are mostly tracking jitter. Both always apply to
-        every instrument, never just the aimed one. Malformed rows are skipped
-        the same way _expression() guards its single row."""
+        every instrument. Malformed rows are skipped the same way
+        _expression() guards its single row."""
         rows = []
         for f in frames:
             if len(f) < 3:
@@ -903,6 +916,7 @@ class App:
         if not rows:
             return
         now = server_time_ms()
+        touched = False
 
         # Volume: direct position. y = 0 is the top of the frame, so raising the
         # hand raises the gain. Same 0.3-1.2 span as the hw wand's volume param.
@@ -910,6 +924,7 @@ class App:
         gain = round(0.3 + 0.9 * (1.0 - y), 3)
         if gain != self._cv_last_gain and now - self._cv_last_gain_ms >= CV_GAIN_THROTTLE_MS:
             self._cv_last_gain, self._cv_last_gain_ms = gain, now
+            touched = True
             await self.hub.broadcast({"t": P.FX_EXPR, "section": P.SECTION_ALL,
                                       "semis": 0, "gain": gain}, roles=("section", "stage"))
 
@@ -920,23 +935,41 @@ class App:
         cutoff = self._cv_speed_buf[-1][0] - CV_SPEED_WINDOW_MS
         self._cv_speed_buf = [(tw, xm) for tw, xm in self._cv_speed_buf if tw >= cutoff]
         if len(self._cv_speed_buf) >= 2:
-            t0, x0 = self._cv_speed_buf[0]
-            t1, x1 = self._cv_speed_buf[-1]
-            dt = (t1 - t0) / 1000.0
+            dt = (self._cv_speed_buf[-1][0] - self._cv_speed_buf[0][0]) / 1000.0
             if 0.03 < dt < 0.5:              # same degenerate-span guard as WandAimer
-                self._cv_last_speed = abs(x1 - x0) / dt
-        if self._cv_last_speed < CV_TEMPO_DEADZONE:
-            return                           # holding still: leave tempo where it is
-        # Log scale: both perceived speed and tracked velocity skew that way, so
-        # a linear map would bunch most of the useful range up at one end.
+                # PATH LENGTH, not net displacement: waving fast is a back-and-
+                # forth, which starts and ends in roughly the same place. Net
+                # displacement reads that as standing still and drops the tempo —
+                # the exact opposite of the gesture. Summing every step measures
+                # how fast the hand actually moved, whichever way it went.
+                path = sum(abs(self._cv_speed_buf[i][1] - self._cv_speed_buf[i - 1][1])
+                           for i in range(1, len(self._cv_speed_buf)))
+                self._cv_last_speed = path / dt
+        # Always maps, including a stationary hand -> floor. Log scale: both
+        # perceived speed and tracked velocity skew that way, so a linear map
+        # would bunch the useful range up at one end.
         lo, hi = math.log(CV_TEMPO_REF_SLOW), math.log(CV_TEMPO_REF_FAST)
         span = max(1e-6, hi - lo)
-        t_norm = max(0.0, min(1.0, (math.log(max(self._cv_last_speed, 1e-3)) - lo) / span))
+        t_norm = max(0.0, min(1.0, (math.log(max(self._cv_last_speed, 1e-4)) - lo) / span))
         mult = CV_TEMPO_MULT_MIN + t_norm * (CV_TEMPO_MULT_MAX - CV_TEMPO_MULT_MIN)
         bpm = round(self._cv_tempo_ref_bpm * mult, 1)   # set_tempo clamps 40-220
         if bpm != self._cv_last_bpm and now - self._cv_last_bpm_ms >= CV_TEMPO_THROTTLE_MS:
             self._cv_last_bpm, self._cv_last_bpm_ms = bpm, now
             self.engine.set_tempo(bpm)
+            touched = True
+            # The scheduler's engine.state carries bpm, but it bails out early
+            # when there are no events — so a PAUSED show would never show the
+            # new tempo anywhere. Push the roster (the console applies engine
+            # off it too) so the readout tracks either way.
+            await self._broadcast_roster()
+
+        if touched and client_id:
+            # Echo what actually landed straight back to the camera: the page
+            # driving the gesture is where the conductor is looking, and it
+            # otherwise sees none of this (fx.expr goes to sections/stage).
+            await self.hub.send_to(client_id, {"t": P.CV_EXPR,
+                                               "gain": self._cv_last_gain,
+                                               "bpm": self._cv_last_bpm})
 
     async def _notify_wand(self) -> None:
         """Reflect show state (pause/play, ai/det mode, selected phone) back to
@@ -1135,7 +1168,11 @@ class App:
             self.session.wand = WandSlot()
             self._wand_client = None
             self.wand.reset()                   # never leave a grab open across a drop
-            self._cv_pinching = False           # ...including a CV pinch-drag
+        if conn.role == "wand-cv":
+            # The camera never owns the wand slot, so its cleanup can't hang off
+            # the branch above: a tab closed mid-pinch would strand the mixer
+            # open and let the NEXT camera's first frames ride a stale window.
+            self._cv_pinching = False
             self._cv_speed_buf = []
             # Gain/tempo keep their last value, matching the hw wand: a drop
             # doesn't reset what was dialled in.

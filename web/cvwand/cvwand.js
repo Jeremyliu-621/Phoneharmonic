@@ -1,10 +1,13 @@
-// CV wand: webcam hand-tracking as a hardware-free wand.
+// CV camera: webcam hand-tracking as the conductor's LEFT HAND.
 //
-// Index fingertip = wand tip. Pinch (thumb+index) = "grab", the same segmentation
-// role the MPR121 capacitive sensor plays on the real wand: pinch closed starts a
-// gesture window, opening ends it. Streams wand.pose frames continuously (the
-// server buffers the ones inside a grab, exactly as it will for wand.imu) plus
-// wand.grab start/end. Joins the single wand slot as variant "cv".
+// It does NOT conduct — the wand owns conducting, modes, aim and select-all, and
+// the server drops wand.* from this role outright (a stray finger count flipping
+// det/ai mid-performance was a real bug). The camera owns two things instead:
+//   TRANSPORT — open palm plays, fist pauses, each held ~1.2s so a passing hand
+//               can't stop the show.
+//   MIXER     — pinch and drag: ↕ position rides volume, ↔ speed rides tempo,
+//               across every instrument, streamed on cv.expr. A held pinch locks
+//               transport out, so riding a fade can never pause the show.
 //
 // Runs on the laptop (getUserMedia needs a secure context — localhost qualifies).
 
@@ -31,17 +34,10 @@ const GRAB_ON = 0.55, GRAB_OFF = 0.80;
 // a fist's incidental thumb proximity is close but rarely this tight.
 const GRAB_ON_TIGHT = 0.30;
 
-const POSE_BATCH = 4;         // frames per wand.pose packet
+const POSE_BATCH = 2;         // frames per cv.expr packet — small, so the beat
+                              // follows the hand instead of trailing it by a batch
 const TRAIL_LEN = 48;
 
-// Shake-to-select-all: a fast, repeated back-and-forth sweep while in SELECT
-// mode clears aim to "all" (every instrument), same as the hardware wand's
-// shake. Direction reversals in the fingertip's x are the signal — a real
-// point only moves one way.
-const SHAKE_WINDOW_MS = 500;
-const SHAKE_MIN_DELTA = 0.035;   // per-frame xm jump fast enough to count
-const SHAKE_MIN_REVERSALS = 4;
-const SELECT_ALL_LATCH_MS = 1500; // "all" sticks this long before pointing resumes aiming
 
 const params = new URLSearchParams(location.search);
 const session = params.get("s") || "lol1";
@@ -60,30 +56,24 @@ let poseBuf = [];
 const trail = [];             // {xm, y, grabbed}
 let playing = true;
 
-// ── the demo-flow gesture vocabulary (docs/demo_flow.md) ─────────────────────
-// The webcam hand sets MODES and transport; conducting happens in AI mode.
-//   ✋ PALM = play      ✊ FIST = pause     🤏 PINCH: AI = conduct, DET = drag
-//                  ↕ volume + swipe ↔ tempo (every instrument), else inert
-//   ☝ ONE_FINGER = SELECT (point at an instrument to target AI/DET edits at
-//                  it, nothing is muted; shake to target "all" instead)
-//   ✌ TWO_FINGERS = DETERMINISTIC mode    🤟 THREE_FINGERS = AI mode
+// ── the camera's vocabulary (docs/demo_flow.md) ──────────────────────────────
+//   ✋ PALM = play (hold)      ✊ FIST = pause (hold)
+//   🤏 PINCH = mixer: drag ↕ volume, swipe ↔ tempo, all instruments.
+//              While held, transport is locked out.
+// Finger-count poses are NOT ours — modes/aim/select belong to the wand.
 // Discrete-gesture reliability: classify off smoothed landmarks (raw ones are
 // too jittery for finger-count geometry) and debounce with asymmetric
 // confirm/release windows, so a single noisy frame can neither restart a hold
-// nor prematurely drop an already-active gesture. Conducting stays instant —
+// nor prematurely drop an already-active gesture. The mixer stays instant —
 // it reads raw landmarks below, untouched by any of this.
 const SMOOTH_ALPHA = 0.5;           // EMA weight for classification-only landmarks
 const CONFIRM_FRAMES = 3;           // consecutive frames a new gesture must hold to commit
 const RELEASE_FRAMES = 4;           // consecutive misses before an active gesture drops
 const COMMIT_COOLDOWN_MS = 250;     // minimum gap between two gesture commits
-let cvMode = "AI";                  // start ready to conduct
+const cvMode = "NONE";              // no modes here any more; cv.state still reports one
 let cvGesture = null;
 let smoothLm = null;                // EMA-smoothed landmarks, classification only
 let candGesture = null, candCount = 0, missCount = 0, lastCommitMs = -Infinity;
-let roster = [];                    // connected sections, left->right (for SELECT aiming)
-let lastAimId = null, lastAimMs = 0;
-let shakeBuf = [];                  // {t, xm} recent SELECT-mode samples
-let lastShakeMs = -Infinity, selectAllUntil = 0;
 
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
@@ -164,11 +154,12 @@ function connect() {
   conn.on(P.WAND_CMD, (m) => {
     if (m.playing !== undefined) playing = m.playing;
   });
-  // roster: SELECT-mode pointing sweeps the connected phones left -> right
-  conn.on(P.ROSTER, (m) => {
-    roster = (m.sections || []).filter((s) => s.connected)
-      .map((s) => ({ id: s.id, px: s.px ?? 0, instrument: s.instrument }))
-      .sort((a, b) => a.px - b.px);
+  // The server echoes back what the mixer actually applied. Showing its numbers
+  // rather than recomputing them locally means the readout can never drift from
+  // the mapping that's really driving the show.
+  conn.on(P.CV_EXPR, (m) => {
+    const pct = Math.round(((m.gain ?? 1) - 0.3) / 0.9 * 100);
+    el("mode").textContent = `🔊 ${pct}%   ♩ ${Math.round(m.bpm ?? 0)}`;
   });
   conn.connect();
 }
@@ -186,7 +177,7 @@ function loop(now) {
 
   if (landmarks) processHand(landmarks, now);
   else {
-    if (grabbed) endGrab(now);      // hand left frame while grabbing -> release
+    if (grabbed) endPinch(now);     // hand left frame mid-pinch -> release the mixer
     smoothLm = null;                // don't ease in from a stale hand position on re-entry
     candGesture = null; candCount = 0; missCount = 0;
     if (cvGesture !== null) { cvGesture = null; sendCvState(); }
@@ -207,11 +198,20 @@ function processHand(lm, now) {
   const sHandW = dist(slm[INDEX_MCP], slm[PINKY_MCP]) || 0.001;
   const sPinchRatio = dist(slm[THUMB_TIP], slm[INDEX_TIP]) / sHandW;
   updateGesture(classify(slm, sPinchRatio), xm, now);
-  tickTransportHold(now);
 
-  // Conducting pinch, mode poses, select/aim, and the pose stream are all
-  // CUT: the camera is transport-only now (server enforces it too — wand.*
-  // from the cv role is dropped). The wand conducts; the camera plays/pauses.
+  // Conducting, mode poses, select/aim and the wand.pose stream stay CUT: the
+  // camera never conducts (the server drops wand.* from the cv role). What it
+  // DOES own is the mixer — pinch and drag to ride volume/tempo. Read off raw
+  // landmarks, instant, so the fader doesn't lag the hand.
+  if (!grabbed && pinchRatio < GRAB_ON) startPinch(now, xm, tip.y);
+  else if (grabbed && pinchRatio > GRAB_OFF) endPinch(now);
+  else if (grabbed) pushPinch(now, xm, tip.y);
+
+  // AFTER the mixer, never before: a hand closing into a pinch passes through
+  // shapes that read as a fist, so on the very frame the pinch latches this
+  // must already know the mixer owns the hand. Running it first fired a pause
+  // at the exact moment you started every pinch.
+  tickTransportHold(now);
 
   trail.push({ xm, y: tip.y, grabbed });
   if (trail.length > TRAIL_LEN) trail.shift();
@@ -241,8 +241,8 @@ function classify(lm, pinchRatio) {
   return null;
 }
 
-// EMA landmark smoothing, used only for discrete-gesture classification — raw
-// per-frame landmarks are too jittery for finger-count geometry.
+// EMA landmark smoothing, used only for discrete-gesture classification — the
+// pinch mixer reads raw landmarks so the fader never lags the hand.
 function smoothLandmarks(lm) {
   if (!smoothLm || smoothLm.length !== lm.length) {
     smoothLm = lm.map((p) => ({ x: p.x, y: p.y, z: p.z }));
@@ -279,7 +279,7 @@ function updateGesture(g, xm, now) {
   }
 }
 
-// The camera is TRANSPORT-ONLY (the wand owns conducting, modes, and aim —
+// The camera is TRANSPORT + MIXER (the wand owns conducting, modes, and aim —
 // a finger count must never flip det/ai mid-performance). And transport needs
 // COMMITMENT: hold the pose ~1.2s before it fires, so a passing open hand
 // can't stop the show.
@@ -296,6 +296,11 @@ function commitGesture(g, xm) {
 }
 
 function tickTransportHold(now) {
+  // A held pinch OWNS the hand: riding the volume fader curls the fingers in
+  // ways that read as a fist, and pausing the show mid-fade is never what you
+  // meant. Park the clock at "now" for as long as the mixer holds the hand, so
+  // the wait also can't mature DURING a pinch and fire the instant you let go.
+  if (grabbed) { holdSince = now; return; }
   if (holdFired || !cvGesture || now - holdSince < TRANSPORT_HOLD_MS) return;
   if (cvGesture === "PALM" && !playing) {
     playing = true; holdFired = true;
@@ -306,63 +311,10 @@ function tickTransportHold(now) {
   }
 }
 
-function setMode(m) {
-  if (cvMode === m) return;
-  // A direct mode flip mid-pinch (AI<->DET) must not leave a grab open under
-  // the old mode's meaning — close it now; next frame's hysteresis check
-  // reopens a fresh one under the new mode if the hand is still pinched.
-  if (grabbed) endGrab(performance.now());
-  cvMode = m;
-  el("mode").textContent = { SELECT: "☝ SELECT", DETERMINISTIC: "✌ DET", AI: "🤟 AI" }[m];
-  if (m === "DETERMINISTIC") send({ t: P.WAND_MODE, mode: "det" });
-  if (m === "AI") send({ t: P.WAND_MODE, mode: "ai" });
-  flashCmd({ SELECT: "☝ select — point at an instrument",
-             DETERMINISTIC: "✌ deterministic — pinch: drag ↕ = volume, swipe ↔ = tempo",
-             AI: "🤟 AI mode — pinch + wave to conduct" }[m]);
-}
-
-// SELECT mode: the index finger sweeps the connected phones left -> right;
-// pointing targets the one under your finger for AI/DET edits (nothing is
-// muted — every instrument keeps playing; the console card just glows).
-function aimAt(xm, now) {
-  if (!roster.length || now - lastAimMs < 350) return;
-  const idx = Math.max(0, Math.min(roster.length - 1, Math.floor(xm * roster.length)));
-  const s = roster[idx];
-  if (s.id === lastAimId) return;
-  lastAimId = s.id; lastAimMs = now;
-  send({ t: P.ADMIN_CMD, cmd: "aim", args: { section_id: s.id } });
-  flashCmd(`🎯 ${s.instrument || s.id}`);
-}
-
-// A fast back-and-forth sweep (direction reversals in the fingertip's x)
-// reads as a shake rather than a point — used to explicitly target "all".
-function detectShake(xm, now) {
-  shakeBuf.push({ t: now, xm });
-  const cutoff = now - SHAKE_WINDOW_MS;
-  while (shakeBuf.length && shakeBuf[0].t < cutoff) shakeBuf.shift();
-  if (shakeBuf.length < 4) return false;
-  let reversals = 0, prevSign = 0;
-  for (let i = 1; i < shakeBuf.length; i++) {
-    const d = shakeBuf[i].xm - shakeBuf[i - 1].xm;
-    if (Math.abs(d) < SHAKE_MIN_DELTA) continue;
-    const sign = d > 0 ? 1 : -1;
-    if (prevSign && sign !== prevSign) reversals++;
-    prevSign = sign;
-  }
-  if (reversals >= SHAKE_MIN_REVERSALS && now - lastShakeMs > SELECT_ALL_LATCH_MS) {
-    lastShakeMs = now;
-    shakeBuf = [];
-    return true;
-  }
-  return false;
-}
-
-function selectAll(now) {
-  lastAimId = "all"; lastAimMs = now;
-  selectAllUntil = now + SELECT_ALL_LATCH_MS;   // let go before pointing resumes aiming
-  send({ t: P.ADMIN_CMD, cmd: "aim", args: { section_id: "all" } });
-  flashCmd("🤚 select all");
-}
+// setMode/aimAt/detectShake/selectAll are GONE: modes, aiming and select-all
+// are wand-only now, and the server drops wand.mode plus admin aim verbs from
+// the cv role — keeping them here would just have been dead code that lies
+// about what the camera can do.
 
 function sendCvState() {
   send({ t: P.CV_STATE, gesture: cvGesture, mode: cvMode, confidence: 0.9 });
@@ -378,20 +330,33 @@ function flashCmd(text) {
   setTimeout(() => { d.style.opacity = "0"; setTimeout(() => d.remove(), 600); }, 900);
 }
 
-function flushPose() {
-  if (!poseBuf.length) return;
-  send({ t: P.WAND_POSE, seq: seq++, frames: poseBuf });
+// ── the left-hand mixer ──────────────────────────────────────────────────────
+// Pinch and drag: ↕ position rides volume, ↔ speed rides tempo, both across
+// every instrument. Frames batch exactly like the old pose stream did, but on
+// cv.expr — the camera is barred from wand.* and this is explicitly not
+// conducting, it's the mixing desk.
+function flushPinch(state) {
+  if (state === "move" && !poseBuf.length) return;
+  send({ t: P.CV_EXPR, state, seq: seq++, frames: poseBuf });
   poseBuf = [];
 }
 
-function startGrab(now) {
+function startPinch(now, xm, y) {
   grabbed = true;
-  send({ t: P.WAND_GRAB, state: "start", tw: Math.round(now) });
+  holdFired = true;             // kill any transport hold the approach matured
+  poseBuf = [[Math.round(now), +xm.toFixed(4), +y.toFixed(4)]];
+  flushPinch("start");
+  flashCmd("🤏 mixer — drag ↕ volume, swipe ↔ tempo");
 }
-function endGrab(now) {
+
+function pushPinch(now, xm, y) {
+  poseBuf.push([Math.round(now), +xm.toFixed(4), +y.toFixed(4)]);
+  if (poseBuf.length >= POSE_BATCH) flushPinch("move");
+}
+
+function endPinch(now) {
   grabbed = false;
-  flushPose();
-  send({ t: P.WAND_GRAB, state: "end", tw: Math.round(now) });
+  flushPinch("end");                  // whatever you dialled in stays put
 }
 
 // --- drawing ---
