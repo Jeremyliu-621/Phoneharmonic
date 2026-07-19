@@ -185,6 +185,27 @@ def test_captured_pose_calibration():
     assert "HUSH" in got3, got3
 
 
+def test_taught_left_right_on_any_gyro_axis():
+    """Taught poses distinguish left/right by ALL-axis rotation integrals, so
+    a mounting that puts the physical turn on ANY gyro axis still works."""
+    tr = StrokeTracker()
+    run(tr, frames(rest(0.4)))
+    tr.capture("NEUTRAL")
+    run(tr, frames(gyro_pulse(4, 160.0, 0.5), t0=2000))   # +80 deg on gx (not the yaw axis!)
+    tr.capture("ARPEGGIO")
+    run(tr, frames(gyro_pulse(4, -160.0, 1.0), t0=4000))  # to -80 deg
+    tr.capture("RUNS")
+    run(tr, frames(gyro_pulse(4, 160.0, 0.5), t0=6000))   # back to 0
+    got, _ = run(tr, frames(rest(1.6), t0=8000))
+    assert got == [], f"neutral fired {got}"
+    run(tr, frames(gyro_pulse(4, 160.0, 0.5), t0=10000))  # +80 again
+    got2, _ = run(tr, frames(rest(1.0), t0=10600))
+    assert "ARPEGGIO" in got2, got2
+    run(tr, frames(gyro_pulse(4, -160.0, 1.0), t0=12000))
+    got3, _ = run(tr, frames(rest(1.0), t0=13100))
+    assert "RUNS" in got3, got3
+
+
 def test_recal_pose_is_neutral():
     """Recalibrating in ANY pose makes that pose the silent neutral — zones
     fire only on departure from it, and returning goes quiet again."""

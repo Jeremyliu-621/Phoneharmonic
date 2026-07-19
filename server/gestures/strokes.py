@@ -85,6 +85,8 @@ class StrokeTracker:
         self._tilt_since: float | None = None  # when the current pose-hold began
         self._tilt_fired = 0.0                 # last pose commit (for re-fire)
         self._yaw = 0.0                        # integrated yaw for LEFT/RIGHT zones
+        self._gyro_int = [0.0, 0.0, 0.0]       # ALL-axis rotation integrals (deg):
+                                               # mounting-agnostic heading for taught poses
         self._pitch0: float | None = None      # calibrated neutral pitch (deg)
         self._roll0 = 0.0                      # calibrated neutral roll (deg)
         self._base_calm_since: float | None = None
@@ -104,9 +106,11 @@ class StrokeTracker:
         NEUTRAL heading (gravity templates never drift; only yaw does).
         Without templates, fall back to the relative-zone baseline."""
         if self._poses.get("NEUTRAL"):
-            delta = self._yaw - self._poses["NEUTRAL"]["yaw"]
+            n_gi = self._poses["NEUTRAL"].get("gi", (0.0, 0.0, 0.0))
+            delta = [c - n for c, n in zip(self._gyro_int, n_gi)]
             for t in self._poses.values():
-                t["yaw"] += delta
+                gi = t.get("gi", (0.0, 0.0, 0.0))
+                t["gi"] = [g + d for g, d in zip(gi, delta)]
             return
         self._yaw = 0.0
         if self._g is not None:
@@ -120,15 +124,18 @@ class StrokeTracker:
     # nearest captured template (gravity direction + yaw), so however the
     # board is mounted, "the pose you showed me" is what fires.
     def capture(self, name: str) -> bool:
-        """Record the current pose (unit gravity + yaw) under `name`."""
+        """Record the current pose (unit gravity + all-axis rotation integrals)
+        under `name`. No axis/sign/mounting assumptions anywhere."""
         if self._g is None:
             return False
         mag = math.sqrt(sum(x * x for x in self._g)) or 1.0
-        self._poses[name] = {"g": [x / mag for x in self._g], "yaw": self._yaw}
+        self._poses[name] = {"g": [x / mag for x in self._g],
+                             "gi": list(self._gyro_int)}
         return True
 
     def set_poses(self, poses: dict) -> None:
-        self._poses = {k: {"g": list(v["g"]), "yaw": float(v["yaw"])}
+        self._poses = {k: {"g": list(v["g"]),
+                           "gi": list(v.get("gi", (0.0, 0.0, 0.0)))}
                        for k, v in (poses or {}).items()}
 
     def get_poses(self) -> dict:
@@ -145,8 +152,9 @@ class StrokeTracker:
         for name, t in self._poses.items():
             dot = max(-1.0, min(1.0, sum(a * b for a, b in zip(gu, t["g"]))))
             gangle = math.degrees(math.acos(dot))
-            yawdiff = abs(self._yaw - t["yaw"])
-            d = math.sqrt(gangle * gangle + (0.8 * yawdiff) ** 2)
+            gi = t.get("gi", (0.0, 0.0, 0.0))
+            headdiff = math.sqrt(sum((a - b) ** 2 for a, b in zip(self._gyro_int, gi)))
+            d = math.sqrt(gangle * gangle + (0.8 * headdiff) ** 2)
             if d < best_d:
                 best, best_d = name, d
         if best_d > POSE_MATCH_DEG or best == "NEUTRAL":
@@ -198,6 +206,8 @@ class StrokeTracker:
         # calmly ~0.6s. A held zone RE-commits, so "pointed at the floor"
         # keeps the room hushed. Switching zones restarts the hold clock.
         self._yaw += yaw_rate * dt
+        for k in range(3):                       # raw per-axis integrals: no axis
+            self._gyro_int[k] += float(f[4 + k]) * dt   # or sign assumptions at all
         pitch, roll = self._angles()
         if self._pitch0 is None:                 # auto-baseline: first calm hold
             if la_mag < TILT_CALM_RMS:
